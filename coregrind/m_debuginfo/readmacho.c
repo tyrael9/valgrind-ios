@@ -1683,7 +1683,7 @@ Bool ML_(read_dyld_shared_cache_image_debug_info)( struct _DebugInfo* di,
          vg_assert(cand->sec_names == NULL);
          if (di->trace_symtab)
             VG_(printf)("nlist final: acquire  avma %010lx-%010lx  %s\n",
-                        cand->addr, cand->addr + cand->size - 1,
+                        cand->avmas.main, cand->avmas.main + cand->size - 1,
                         cand->pri_name );
          ML_(addSym)( di, cand );
       }
