@@ -74,6 +74,7 @@ nobase_pkginclude_HEADERS = \
 	vki/vki-scnums-mips32-linux.h	\
 	vki/vki-scnums-mips64-linux.h	\
 	vki/vki-scnums-darwin.h         \
+	vki/vki-scnums-arm-darwin.h     \
 	vki/vki-xen.h                   \
 	vki/vki-xen-domctl.h		\
 	vki/vki-xen-evtchn.h		\

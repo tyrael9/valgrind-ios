@@ -67,9 +67,9 @@ BUILT_SOURCES = pub/libvex_guest_offsets.h
 CLEANFILES    = pub/libvex_guest_offsets.h
 
 if COMPILER_IS_CLANG
-CFLAGS_FOR_GENOFFSETS = $(CFLAGS) -no-integrated-as
+CFLAGS_FOR_GENOFFSETS = $(CPPFLAGS) $(CFLAGS) -no-integrated-as
 else
-CFLAGS_FOR_GENOFFSETS = $(CFLAGS)
+CFLAGS_FOR_GENOFFSETS = $(CPPFLAGS) $(CFLAGS)
 endif
 
 # This is very uggerly.  Need to sed out both "xyzzyN" and

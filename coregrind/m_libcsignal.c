@@ -211,7 +211,13 @@ void darwin_signal_demux(void* a1, UWord a2, UWord a3, void* a4, void* a5) {
                     "POST demux sig, a2 = %lu, signo = %lu\n", a2, a3);
    VG_(do_syscall2)(__NR_sigreturn, (UWord)a5, 0x1E);
    /* NOTREACHED */
+#if defined(VGA_x86) || defined(VGA_amd64)
    __asm__ __volatile__("ud2");
+#elif defined(VGA_arm)
+   __asm__ __volatile__(".long 0xFFFFFFFF");
+#else
+#  error Unknown platform
+#endif
 }
 #endif
 

@@ -66,6 +66,9 @@ TOOL_LDFLAGS_X86_DARWIN = \
 
 TOOL_LDFLAGS_AMD64_DARWIN = \
 	$(TOOL_LDFLAGS_COMMON_DARWIN) -arch x86_64
+	
+TOOL_LDFLAGS_ARM_DARWIN = \
+	$(TOOL_LDFLAGS_COMMON_DARWIN) -arch armv7
 
 # MIPS Linux default start symbol is __start, not _start like on x86 or amd
 TOOL_LDFLAGS_MIPS32_LINUX = \
@@ -125,6 +128,9 @@ LIBREPLACEMALLOC_X86_DARWIN = \
 
 LIBREPLACEMALLOC_AMD64_DARWIN = \
 	$(top_builddir)/coregrind/libreplacemalloc_toolpreload-amd64-darwin.a
+	
+LIBREPLACEMALLOC_ARM_DARWIN = \
+	$(top_builddir)/coregrind/libreplacemalloc_toolpreload-arm-darwin.a
 
 LIBREPLACEMALLOC_S390X_LINUX = \
 	$(top_builddir)/coregrind/libreplacemalloc_toolpreload-s390x-linux.a
@@ -178,6 +184,9 @@ LIBREPLACEMALLOC_LDFLAGS_X86_DARWIN = \
 
 LIBREPLACEMALLOC_LDFLAGS_AMD64_DARWIN = \
 	$(LIBREPLACEMALLOC_AMD64_DARWIN)
+
+LIBREPLACEMALLOC_LDFLAGS_ARM_DARWIN = \
+	$(LIBREPLACEMALLOC_ARM_DARWIN)
 
 LIBREPLACEMALLOC_LDFLAGS_S390X_LINUX = \
 	-Wl,--whole-archive \

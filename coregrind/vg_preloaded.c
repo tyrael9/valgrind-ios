@@ -128,7 +128,11 @@ __private_extern__ const char *__crashreporter_info__ = "Instrumented by Valgrin
    dyld is done loading vg_preload.so.
 */
 #include <string.h>
+#if defined(VGA_x86) || defined(VGA_amd64)
 #include <crt_externs.h>
+#else
+extern char ***_NSGetEnviron(void);
+#endif
 
 // GrP fixme copied from m_libcproc
 static void env_unsetenv ( HChar **env, const HChar *varname )

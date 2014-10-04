@@ -277,6 +277,9 @@ static Int ptrace_setregs(Int pid, const VexGuestArchState* vex)
 
 #elif defined(VGP_amd64_darwin)
    I_die_here;
+   
+#elif defined(VGP_arm_darwin)
+   I_die_here;
 
 #elif defined(VGP_s390x_linux)
    struct vki_user_regs_struct regs;

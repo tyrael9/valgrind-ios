@@ -44,10 +44,16 @@ void record_named_port(ThreadId tid, mach_port_t port, mach_port_right_t right, 
 extern const SyscallTableEntry ML_(mach_trap_table)[];
 extern const SyscallTableEntry ML_(syscall_table)[];
 extern const SyscallTableEntry ML_(mdep_trap_table)[];
+#if defined(VGA_arm)
+extern const SyscallTableEntry ML_(ml_trap_table)[];
+#endif
 
 extern const UInt ML_(syscall_table_size);
 extern const UInt ML_(mach_trap_table_size);
 extern const UInt ML_(mdep_trap_table_size);
+#if defined(VGA_arm)
+extern const UInt ML_(ml_trap_table_size);
+#endif
 
 void VG_(show_open_ports)(void);
 
@@ -724,6 +730,8 @@ extern void pthread_hijack(Addr self, Addr kport, Addr func, Addr func_arg,
                            Addr stacksize, Addr flags, Addr sp);
 extern void wqthread_hijack_asm(void);
 extern void wqthread_hijack(Addr self, Addr kport, Addr stackaddr, Addr workitem, Int reuse, Addr sp);
+
+extern const HChar *name_for_port(mach_port_t port);
 
 extern Addr pthread_starter;
 extern Addr wqthread_starter;

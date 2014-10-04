@@ -1435,13 +1435,6 @@ Bool VG_(machine_get_hwcaps)( void )
      volatile Int archlevel;
      Int r;
 
-     /* This is a kludge.  Really we ought to back-convert saved_act
-        into a toK_t using VG_(convert_sigaction_fromK_to_toK), but
-        since that's a no-op on all ppc64 platforms so far supported,
-        it's not worth the typing effort.  At least include most basic
-        sanity check: */
-     vg_assert(sizeof(vki_sigaction_fromK_t) == sizeof(vki_sigaction_toK_t));
-
      VG_(sigemptyset)(&tmp_set);
      VG_(sigaddset)(&tmp_set, VKI_SIGILL);
      VG_(sigaddset)(&tmp_set, VKI_SIGFPE);
@@ -1451,10 +1444,10 @@ Bool VG_(machine_get_hwcaps)( void )
 
      r = VG_(sigaction)(VKI_SIGILL, NULL, &saved_sigill_act);
      vg_assert(r == 0);
-     tmp_sigill_act = saved_sigill_act;
+     VG_(convert_sigaction_fromK_to_toK)(&saved_sigill_act, &tmp_sigill_act);
 
      VG_(sigaction)(VKI_SIGFPE, NULL, &saved_sigfpe_act);
-     tmp_sigfpe_act = saved_sigfpe_act;
+     VG_(convert_sigaction_fromK_to_toK)(&saved_sigfpe_act, &tmp_sigfpe_act);
 
      /* NODEFER: signal handler does not return (from the kernel's point of
         view), hence if it is to successfully catch a signal more than once,

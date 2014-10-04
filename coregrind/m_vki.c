@@ -78,7 +78,8 @@ void VG_(vki_do_initial_consistency_checks) ( void )
 
 #  if defined(VGO_linux)
    /* nothing to check */
-#  elif defined(VGP_x86_darwin) || defined(VGP_amd64_darwin)
+#  elif defined(VGP_x86_darwin) || defined(VGP_amd64_darwin) || \
+   defined(VGP_arm_darwin)
    vg_assert(_VKI_NSIG == NSIG);
    vg_assert(_VKI_NSIG == 32);
    vg_assert(_VKI_NSIG_WORDS == 1);

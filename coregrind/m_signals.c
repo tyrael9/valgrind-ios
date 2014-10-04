@@ -513,6 +513,70 @@ typedef struct SigQueue {
       srP->misc.AMD64.r_rbp = (ULong)(ss->__rbp);
    }
 
+#elif defined(VGP_arm_darwin)
+   static inline Addr VG_UCONTEXT_INSTR_PTR( void* ucV ) {
+      ucontext_t* uc = (ucontext_t*)ucV;
+      struct __darwin_mcontext32* mc = uc->uc_mcontext;
+      struct __darwin_arm_thread_state* ss = &mc->__ss;
+      return ss->__pc;
+   }
+   static inline Addr VG_UCONTEXT_STACK_PTR( void* ucV ) {
+      ucontext_t* uc = (ucontext_t*)ucV;
+      struct __darwin_mcontext32* mc = uc->uc_mcontext;
+      struct __darwin_arm_thread_state* ss = &mc->__ss;
+      return ss->__sp;
+   }
+   static inline SysRes VG_UCONTEXT_SYSCALL_SYSRES( void* ucV,
+                                                    UWord scclass ) {
+      /* this is complicated by the problem that there are 3 different
+         kinds of syscalls, each with its own return convention.
+         NB: scclass is a host word, hence UWord is good for both
+         amd64-darwin and x86-darwin */
+      ucontext_t* uc = (ucontext_t*)ucV;
+      struct __darwin_mcontext32* mc = uc->uc_mcontext;
+      struct __darwin_arm_thread_state* ss = &mc->__ss;
+      /* duplicates logic in m_syswrap.getSyscallStatusFromGuestState */
+      UInt carry = (1 << 29) & ss->__cpsr;
+      UInt err = 0;
+      UInt wLO = 0;
+      UInt wHI = 0;
+      switch (scclass) {
+         case VG_DARWIN_SYSCALL_CLASS_UNIX:
+            err = carry;
+            wLO = ss->__r[0];
+            wHI = ss->__r[1];
+            break;
+         case VG_DARWIN_SYSCALL_CLASS_MACH:
+            wLO = ss->__r[0];
+            break;
+         case VG_DARWIN_SYSCALL_CLASS_MDEP:
+            wLO = ss->__r[0];
+            break;
+         case VG_DARWIN_SYSCALL_CLASS_ML:
+            wLO = ss->__r[0];
+            wHI = ss->__r[1];
+            break;
+         default: 
+            vg_assert(0);
+            break;
+      }
+      return VG_(mk_SysRes_arm_darwin)( scclass, err ? True : False, 
+                                        wHI, wLO );
+   }
+   static inline
+   void VG_UCONTEXT_TO_UnwindStartRegs( UnwindStartRegs* srP,
+                                        void* ucV ) {
+      ucontext_t* uc = (ucontext_t*)(ucV);
+      struct __darwin_mcontext32* mc = uc->uc_mcontext;
+      struct __darwin_arm_thread_state* ss = &mc->__ss;
+      srP->r_pc = (ULong)(ss->__pc);
+      srP->r_sp = (ULong)(ss->__sp);
+      srP->misc.ARM.r14 = (UInt)(ss->__lr);
+      srP->misc.ARM.r12 = (UInt)(ss->__r[12]);
+      srP->misc.ARM.r11 = (UInt)(ss->__r[11]);
+      srP->misc.ARM.r7 = (UInt)(ss->__r[7]);
+   }
+
 #elif defined(VGP_s390x_linux)
 
 #  define VG_UCONTEXT_INSTR_PTR(uc)       ((uc)->uc_mcontext.regs.psw.addr)
@@ -933,6 +997,16 @@ extern void my_sigreturn(void);
    "my_sigreturn:\n" \
    "ud2\n"
 
+#elif defined(VGP_arm_darwin)
+#  define _MY_SIGRETURN(name) \
+   ".text\n" \
+   ".globl my_sigreturn\n" \
+   ".align 4           \n" \
+   "my_sigreturn:\n\t" \
+   "    mov  r12, #" VG_STRINGIFY(VG_DARWIN_SYSNO_FOR_KERNEL_UNIX(__NR_DARWIN_FAKE_SIGRETURN)) "\n\t" \
+   "    svc  0x80\n" \
+   ".long 0xFFFFFFFF\n"
+
 #elif defined(VGP_s390x_linux)
 #  define _MY_SIGRETURN(name) \
    ".text\n" \
@@ -1008,7 +1082,7 @@ static void handle_SCSS_change ( Bool force_update )
       ksa.sa_flags    = skss.skss_per_sig[sig].skss_flags;
 #     if !defined(VGP_ppc32_linux) && \
          !defined(VGP_x86_darwin) && !defined(VGP_amd64_darwin) && \
-         !defined(VGP_mips32_linux)
+         !defined(VGP_arm_darwin) && !defined(VGP_mips32_linux)
       ksa.sa_restorer = my_sigreturn;
 #     endif
       /* Re above ifdef (also the assertion below), PaulM says:
@@ -1042,7 +1116,8 @@ static void handle_SCSS_change ( Bool force_update )
                    == skss_old.skss_per_sig[sig].skss_flags);
 #        if !defined(VGP_ppc32_linux) && \
             !defined(VGP_x86_darwin) && !defined(VGP_amd64_darwin) && \
-            !defined(VGP_mips32_linux) && !defined(VGP_mips64_linux)
+            !defined(VGP_arm_darwin) && !defined(VGP_mips32_linux) && \
+            !defined(VGP_mips64_linux)
          vg_assert(ksa_old.sa_restorer == my_sigreturn);
 #        endif
          VG_(sigaddset)( &ksa_old.sa_mask, VKI_SIGKILL );
@@ -1162,7 +1237,8 @@ SysRes VG_(do_sys_sigaction) ( Int signo,
       old_act->ksa_handler = scss.scss_per_sig[signo].scss_handler;
       old_act->sa_flags    = scss.scss_per_sig[signo].scss_flags;
       old_act->sa_mask     = scss.scss_per_sig[signo].scss_mask;
-#     if !defined(VGP_x86_darwin) && !defined(VGP_amd64_darwin)
+#     if !defined(VGP_x86_darwin) && !defined(VGP_amd64_darwin) && \
+      !defined(VGP_arm_darwin)
       old_act->sa_restorer = scss.scss_per_sig[signo].scss_restorer;
 #     endif
    }
@@ -1174,12 +1250,14 @@ SysRes VG_(do_sys_sigaction) ( Int signo,
       scss.scss_per_sig[signo].scss_mask     = new_act->sa_mask;
 
       scss.scss_per_sig[signo].scss_restorer = NULL;
-#     if !defined(VGP_x86_darwin) && !defined(VGP_amd64_darwin)
+#     if !defined(VGP_x86_darwin) && !defined(VGP_amd64_darwin) && \
+      !defined(VGP_arm_darwin)
       scss.scss_per_sig[signo].scss_restorer = new_act->sa_restorer;
 #     endif
 
       scss.scss_per_sig[signo].scss_sa_tramp = NULL;
-#     if defined(VGP_x86_darwin) || defined(VGP_amd64_darwin)
+#     if defined(VGP_x86_darwin) || defined(VGP_amd64_darwin) || \
+      defined(VGP_arm_darwin)
       scss.scss_per_sig[signo].scss_sa_tramp = new_act->sa_tramp;
 #     endif
 
@@ -1487,7 +1565,8 @@ void VG_(kill_self)(Int sigNo)
 
    sa.ksa_handler = VKI_SIG_DFL;
    sa.sa_flags = 0;
-#  if !defined(VGP_x86_darwin) && !defined(VGP_amd64_darwin)
+#  if !defined(VGP_x86_darwin) && !defined(VGP_amd64_darwin) && \
+      !defined(VGP_arm_darwin)
    sa.sa_restorer = 0;
 #  endif
    VG_(sigemptyset)(&sa.sa_mask);
@@ -2003,7 +2082,7 @@ void VG_(synth_sigtrap)(ThreadId tid)
 {
    vki_siginfo_t info;
    struct vki_ucontext uc;
-#  if defined(VGP_x86_darwin)
+#  if defined(VGP_x86_darwin) || defined(VGP_arm_darwin)
    struct __darwin_mcontext32 mc;
 #  elif defined(VGP_amd64_darwin)
    struct __darwin_mcontext64 mc;
@@ -2027,6 +2106,11 @@ void VG_(synth_sigtrap)(ThreadId tid)
    uc.uc_mcontext = &mc;
    uc.uc_mcontext->__es.__trapno = 3;
    uc.uc_mcontext->__es.__err = 0;
+#  elif defined(VGP_arm_darwin)
+   VG_(memset)(&mc, 0, sizeof(mc));
+   uc.uc_mcontext = &mc;
+   uc.uc_mcontext->__es.__exception = 0;
+   uc.uc_mcontext->__es.__fsr = 7;
 #  endif
 
    /* fixs390: do we need to do anything here for s390 ? */
@@ -2653,7 +2737,8 @@ void pp_ksigaction ( vki_sigaction_toK_t* sa )
    VG_(printf)("pp_ksigaction: handler %p, flags 0x%x, restorer %p\n", 
                sa->ksa_handler, 
                (UInt)sa->sa_flags, 
-#              if !defined(VGP_x86_darwin) && !defined(VGP_amd64_darwin)
+#              if !defined(VGP_x86_darwin) && !defined(VGP_amd64_darwin) && \
+                  !defined(VGP_arm_darwin)
                   sa->sa_restorer
 #              else
                   (void*)0
@@ -2675,7 +2760,8 @@ void VG_(set_default_handler)(Int signo)
 
    sa.ksa_handler = VKI_SIG_DFL;
    sa.sa_flags = 0;
-#  if !defined(VGP_x86_darwin) && !defined(VGP_amd64_darwin)
+#  if !defined(VGP_x86_darwin) && !defined(VGP_amd64_darwin) && \
+      !defined(VGP_arm_darwin)
    sa.sa_restorer = 0;
 #  endif
    VG_(sigemptyset)(&sa.sa_mask);
@@ -2759,7 +2845,8 @@ void VG_(sigstartup_actions) ( void )
       /* Get the old host action */
       ret = VG_(sigaction)(i, NULL, &sa);
 
-#     if defined(VGP_x86_darwin) || defined(VGP_amd64_darwin)
+#     if defined(VGP_x86_darwin) || defined(VGP_amd64_darwin) || \
+         defined(VGP_arm_darwin)
       /* apparently we may not even ask about the disposition of these
          signals, let alone change them */
       if (ret != 0 && (i == VKI_SIGKILL || i == VKI_SIGSTOP))
@@ -2777,7 +2864,8 @@ void VG_(sigstartup_actions) ( void )
 
 	 tsa.ksa_handler = (void *)sync_signalhandler;
 	 tsa.sa_flags = VKI_SA_SIGINFO;
-#        if !defined(VGP_x86_darwin) && !defined(VGP_amd64_darwin)
+#        if !defined(VGP_x86_darwin) && !defined(VGP_amd64_darwin) && \
+            !defined(VGP_arm_darwin)
 	 tsa.sa_restorer = 0;
 #        endif
 	 VG_(sigfillset)(&tsa.sa_mask);
@@ -2804,12 +2892,14 @@ void VG_(sigstartup_actions) ( void )
       scss.scss_per_sig[i].scss_mask     = sa.sa_mask;
 
       scss.scss_per_sig[i].scss_restorer = NULL;
-#     if !defined(VGP_x86_darwin) && !defined(VGP_amd64_darwin)
+#     if !defined(VGP_x86_darwin) && !defined(VGP_amd64_darwin) && \
+         !defined(VGP_arm_darwin)
       scss.scss_per_sig[i].scss_restorer = sa.sa_restorer;
 #     endif
 
       scss.scss_per_sig[i].scss_sa_tramp = NULL;
-#     if defined(VGP_x86_darwin) || defined(VGP_amd64_darwin)
+#     if defined(VGP_x86_darwin) || defined(VGP_amd64_darwin) || \
+         defined(VGP_arm_darwin)
       scss.scss_per_sig[i].scss_sa_tramp = NULL;
       /*sa.sa_tramp;*/
       /* We can't know what it was, because Darwin's sys_sigaction

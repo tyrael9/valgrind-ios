@@ -800,6 +800,11 @@ void VG_(invalidate_icache) ( void *ptr, SizeT nbytes )
    Addr endaddr   = startaddr + nbytes;
    VG_(do_syscall2)(__NR_ARM_cacheflush, startaddr, endaddr);
 
+#  elif defined(VGP_arm_darwin)
+   /* ARM cache flushes are privileged, so we must defer to the kernel. */
+   Addr startaddr = (Addr) ptr;
+   VG_(do_syscall2)(__NR_sys_icache_invalidate, startaddr, nbytes);
+
 #  elif defined(VGP_arm64_linux)
    // This arm64_linux section of this function VG_(invalidate_icache)
    // is copied from

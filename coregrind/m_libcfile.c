@@ -271,7 +271,7 @@ Off64T VG_(lseek) ( Int fd, Off64T offset, Int whence )
    vg_assert(sizeof(Off64T) == sizeof(Word));
    return sr_isError(res) ? (-1) : sr_Res(res);
 #  endif
-#  elif defined(VGP_x86_darwin)
+#  elif defined(VGP_x86_darwin) || defined(VGP_arm_darwin)
    SysRes res = VG_(do_syscall4)(__NR_lseek, fd, 
                                  offset & 0xffffffff, offset >> 32, whence);
    return sr_isError(res) ? (-1) : sr_Res(res);
@@ -316,7 +316,12 @@ SysRes VG_(stat) ( const HChar* file_name, struct vg_stat* vgbuf )
    /* First try with stat64.  If that doesn't work out, fall back to
       the vanilla version. */
 #  if defined(__NR_stat64)
-   { struct vki_stat64 buf64;
+   { 
+#  if defined(VGP_arm_darwin)
+     struct vki_stat buf64;
+#  else
+     struct vki_stat64 buf64;
+#  endif
      res = VG_(do_syscall2)(__NR_stat64, (UWord)file_name, (UWord)&buf64);
      if (!(sr_isError(res) && sr_Err(res) == VKI_ENOSYS)) {
         /* Success, or any failure except ENOSYS */
@@ -353,7 +358,12 @@ Int VG_(fstat) ( Int fd, struct vg_stat* vgbuf )
    /* First try with fstat64.  If that doesn't work out, fall back to
       the vanilla version. */
 #  if defined(__NR_fstat64)
-   { struct vki_stat64 buf64;
+   { 
+#  if defined(VGP_arm_darwin)
+      struct vki_stat buf64;
+#  else
+      struct vki_stat64 buf64;
+#  endif
      res = VG_(do_syscall2)(__NR_fstat64, (UWord)fd, (UWord)&buf64);
      if (!(sr_isError(res) && sr_Err(res) == VKI_ENOSYS)) {
         /* Success, or any failure except ENOSYS */
@@ -733,7 +743,7 @@ SysRes VG_(pread) ( Int fd, void* buf, Int count, OffT offset )
    vg_assert(sizeof(OffT) == 8);
    res = VG_(do_syscall4)(__NR_pread_nocancel, fd, (UWord)buf, count, offset);
    return res;
-#  elif defined(VGP_x86_darwin)
+#  elif defined(VGP_x86_darwin) || defined(VGP_arm_darwin)
    vg_assert(sizeof(OffT) == 8);
    res = VG_(do_syscall5)(__NR_pread_nocancel, fd, (UWord)buf, count, 
                           offset & 0xffffffff, offset >> 32);
@@ -1061,7 +1071,7 @@ Int VG_(write_socket)( Int sd, const void *msg, Int count )
                                        count, VKI_MSG_NOSIGNAL, 0,0);
    return sr_isError(res) ? -1 : sr_Res(res);
 
-#  elif defined(VGP_x86_darwin) || defined(VGP_amd64_darwin)
+#  elif defined(VGP_x86_darwin) || defined(VGP_amd64_darwin) || defined(VGP_arm_darwin)
    SysRes res;
    res = VG_(do_syscall3)(__NR_write_nocancel, sd, (UWord)msg, count);
    return sr_isError(res) ? -1 : sr_Res(res);

@@ -1,6 +1,6 @@
 
 /*--------------------------------------------------------------------*/
-/*--- System call numbers for Darwin.          vki-scnums-darwin.h ---*/
+/*--- System call numbers for iOS.         vki-scnums-arm-darwin.h ---*/
 /*--------------------------------------------------------------------*/
 
 /*
@@ -9,6 +9,8 @@
 
    Copyright (C) 2007-2013 Apple Inc.
       Greg Parker  gparker@apple.com
+   Copyright (C) 2014 Zhui Deng
+      dengd03@gmail.com
 
    This program is free software; you can redistribute it and/or
    modify it under the terms of the GNU General Public License as
@@ -28,8 +30,8 @@
    The GNU General Public License is contained in the file COPYING.
 */
 
-#ifndef __VKI_SCNUMS_DARWIN_H
-#define __VKI_SCNUMS_DARWIN_H
+#ifndef __VKI_SCNUMS_ARM_DARWIN_H
+#define __VKI_SCNUMS_ARM_DARWIN_H
 
 
 // need DARWIN_10_x definitions
@@ -43,12 +45,8 @@
 // 24 are the syscall number (index) within that class.
 //
 // The 32-bit encoding is that the syscall number (index) is stored as-is and
-// the syscall class is encoded as the argument to the 'int' instruction used
-// to trigger the syscall:
-// - 0x80: Unix
-// - 0x81: Mach
-// - 0x82: Machine-dependent
-// - 0x83: Diagnostic
+// the syscall class is encoded as the argument to the 'svc' instruction used
+// to trigger the syscall.
 // Furthermore, just to make life interesting, for Mach traps the number is
 // negative.
 //
@@ -57,13 +55,16 @@
 // convert back with VG_DARWIN_SYSNO_FOR_KERNEL when passing any syscall
 // number back to the kernel (__NR_something shouldn't be passed directly to
 // the kernel).
-//
-// Hack: x86 `int $0x80` (unix, 64-bit result) are special.
-// [I haven't worked out why... --njn]
 // 
 // On ARM, all system calls are trigger by "svc 0x80".
 // For the machine-dependent system calls, the R12 register is set
 // to 0x80000000 and the R3 register holds the real system call number.
+
+
+#if defined(VGA_arm)
+#else
+#error unknown architecture
+#endif
 
 #define VG_DARWIN_SYSCALL_CLASS_SHIFT     24
 #define VG_DARWIN_SYSCALL_CLASS_MASK      (0xFF << VG_DARWIN_SYSCALL_CLASS_SHIFT)
@@ -74,6 +75,7 @@
 #define VG_DARWIN_SYSCALL_CLASS_UNIX      2       /* Unix/BSD */
 #define VG_DARWIN_SYSCALL_CLASS_MDEP      3       /* Machine-dependent */
 #define VG_DARWIN_SYSCALL_CLASS_DIAG      4       /* Diagnostics */
+#define VG_DARWIN_SYSCALL_CLASS_ML        5       /* for ml_get_timebase */
 
 // Macros for encoding syscall numbers in the 64-bit encoding scheme.
 #define VG_DARWIN_SYSCALL_CONSTRUCT_MACH(syscall_number) \
@@ -91,57 +93,37 @@
 #define VG_DARWIN_SYSCALL_CONSTRUCT_DIAG(syscall_number) \
     ((VG_DARWIN_SYSCALL_CLASS_DIAG << VG_DARWIN_SYSCALL_CLASS_SHIFT) | \
      (VG_DARWIN_SYSCALL_NUMBER_MASK & (syscall_number)))
+           
+#define VG_DARWIN_SYSCALL_CONSTRUCT_ML(syscall_number) \
+    ((VG_DARWIN_SYSCALL_CLASS_ML << VG_DARWIN_SYSCALL_CLASS_SHIFT) | \
+     (VG_DARWIN_SYSCALL_NUMBER_MASK & (syscall_number)))
 
 
 /* Macros for decoding syscall numbers from the 64-bit encoding scheme. */
 #define VG_DARWIN_SYSNO_INDEX(sysno) ((sysno) & VG_DARWIN_SYSCALL_NUMBER_MASK)
 #define VG_DARWIN_SYSNO_CLASS(sysno) ((sysno) >> VG_DARWIN_SYSCALL_CLASS_SHIFT)
 
-
-/* Macros for converting syscall numbers to the form expected by the kernel.*/
-#if defined(VGA_x86)
-   // This converts the 64-bit syscall number encoding, which we use
-   // throughout Valgrind, into the 32-bit syscall number encoding, which is
-   // suitable for passing to the (32-bit) kernel.
+           
 #  define VG_DARWIN_SYSNO_FOR_KERNEL(sysno) \
-    ((VG_DARWIN_SYSNO_CLASS(sysno) == VG_DARWIN_SYSCALL_CLASS_MACH) \
+    (((VG_DARWIN_SYSNO_CLASS(sysno) == VG_DARWIN_SYSCALL_CLASS_MACH) ||  \
+      (VG_DARWIN_SYSNO_CLASS(sysno) == VG_DARWIN_SYSCALL_CLASS_ML)) \
     ? -VG_DARWIN_SYSNO_INDEX(sysno) \
     :  VG_DARWIN_SYSNO_INDEX(sysno) \
     )
 
-#elif defined(VGA_amd64)
-   // For 64-bit systems, we don't need to do anything to the syscall number.
-#  define VG_DARWIN_SYSNO_FOR_KERNEL(sysno) (sysno)
+#  define VG_DARWIN_SYSNO_FOR_KERNEL_MACH(sysno) (-VG_DARWIN_SYSNO_INDEX(sysno))
+#  define VG_DARWIN_SYSNO_FOR_KERNEL_UNIX(sysno) (VG_DARWIN_SYSNO_INDEX(sysno))
+#  define VG_DARWIN_SYSNO_FOR_KERNEL_MDEP(sysno) (VG_DARWIN_SYSNO_INDEX(sysno))
+#  define VG_DARWIN_SYSNO_FOR_KERNEL_ML(sysno)   (-VG_DARWIN_SYSNO_INDEX(sysno))
 
-#else
-#  error Unknown architecture
-#endif
-
+#define __NR_ml_get_timebase                          VG_DARWIN_SYSCALL_CONSTRUCT_ML(3)
 
 // mdep syscalls
 
-#if defined(VGA_x86)
-
-// osfmk/i386/machdep_call.c
-// DDD: the last two are BSD_CALL instead of CALL...
-//#define __NR_thread_get_cthread_self      VG_DARWIN_SYSCALL_CONSTRUCT_MDEP(0)
-//#define __NR_thread_set_cthread_self      VG_DARWIN_SYSCALL_CONSTRUCT_MDEP(1)
-// 2 is invalid
-#define __NR_thread_fast_set_cthread_self VG_DARWIN_SYSCALL_CONSTRUCT_MDEP(3)
-//#define __NR_thread_set_user_ldt          VG_DARWIN_SYSCALL_CONSTRUCT_MDEP(4)
-//#define __NR_i386_set_ldt                 VG_DARWIN_SYSCALL_CONSTRUCT_MDEP(5)
-//#define __NR_i386_get_ldt                 VG_DARWIN_SYSCALL_CONSTRUCT_MDEP(6)
-
-#elif defined(VGA_amd64)
-
-// osfmk/i386/machdep_call.c
-// 0, 1, 2 are invalid
-#define __NR_thread_fast_set_cthread_self VG_DARWIN_SYSCALL_CONSTRUCT_MDEP(3)
-// 4, 5, 6 are invalid
-
-#else
-#  error unknown architecture
-#endif
+                  
+#define __NR_sys_icache_invalidate        VG_DARWIN_SYSCALL_CONSTRUCT_MDEP(0)
+#define __NR_sys_dcache_flush             VG_DARWIN_SYSCALL_CONSTRUCT_MDEP(1)
+#define __NR_thread_fast_set_cthread_self VG_DARWIN_SYSCALL_CONSTRUCT_MDEP(2)
 
 
 // osfmk/mach/syscall_sw.h
@@ -179,26 +161,18 @@
 #define __NR_semaphore_timedwait_trap         VG_DARWIN_SYSCALL_CONSTRUCT_MACH(38)
 #define __NR_semaphore_timedwait_signal_trap  VG_DARWIN_SYSCALL_CONSTRUCT_MACH(39)
 
-#if DARWIN_VERS >= DARWIN_10_9
 #define __NR_kernelrpc_mach_port_guard_trap   VG_DARWIN_SYSCALL_CONSTRUCT_MACH(41)
 #define __NR_kernelrpc_mach_port_unguard_trap VG_DARWIN_SYSCALL_CONSTRUCT_MACH(42)
-#endif
-
-#if defined(VGA_x86) || DARWIN_VERS == DARWIN_10_9
-#define __NR_map_fd                           VG_DARWIN_SYSCALL_CONSTRUCT_MACH(43)
-#endif
 
 #define __NR_task_name_for_pid                VG_DARWIN_SYSCALL_CONSTRUCT_MACH(44)
 #define __NR_task_for_pid                     VG_DARWIN_SYSCALL_CONSTRUCT_MACH(45)
 #define __NR_pid_for_task                     VG_DARWIN_SYSCALL_CONSTRUCT_MACH(46)
 
-#if defined(VGA_x86)
 #define __NR_macx_swapon                      VG_DARWIN_SYSCALL_CONSTRUCT_MACH(48)
 #define __NR_macx_swapoff                     VG_DARWIN_SYSCALL_CONSTRUCT_MACH(49)
 #define __NR_macx_triggers                    VG_DARWIN_SYSCALL_CONSTRUCT_MACH(51)
 #define __NR_macx_backing_store_suspend       VG_DARWIN_SYSCALL_CONSTRUCT_MACH(52)
 #define __NR_macx_backing_store_recovery      VG_DARWIN_SYSCALL_CONSTRUCT_MACH(53)
-#endif
 
 #define __NR_swtch_pri                        VG_DARWIN_SYSCALL_CONSTRUCT_MACH(59)
 #define __NR_swtch                            VG_DARWIN_SYSCALL_CONSTRUCT_MACH(60)
@@ -262,7 +236,7 @@
 #define	__NR_dup            VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(41)
 #define	__NR_pipe           VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(42) // was UX64
 #define	__NR_getegid        VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(43)
-#define	__NR_profil         VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(44)
+           /* iOS 44 missing*/
 			/* 45  old ktrace */
 #define	__NR_sigaction      VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(46)
 #define	__NR_getgid         VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(47)
@@ -373,13 +347,13 @@
 #define	__NR_setprivexec    VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(152)
 #define	__NR_pread          VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(153)
 #define	__NR_pwrite         VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(154)
-#define __NR_nfssvc         VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(155)
+#define	__NR_nfssvc         VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(155)
 			/* 156  old getdirentries */
 #define	__NR_statfs         VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(157)
 #define	__NR_fstatfs        VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(158)
 #define	__NR_unmount        VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(159)
 			/* 160  old async_daemon */
-#define __NR_getfh          VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(161)
+#define	__NR_getfh           VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(161)
 			/* 162  old getdomainname */
 			/* 163  old setdomainname */
 			/* 164  */
@@ -388,13 +362,14 @@
 #define	__NR_mount          VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(167)
 			/* 168  old ustat */
 #define __NR_csops          VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(169)
-			/* 170  old table */
+#define __NR_csops_audittoken VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(170)
+			/* iOS 170 NEW */
 			/* 171  old wait3 */
 			/* 172  old rpause */
 #define	__NR_waitid         VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(173)
 			/* 174  old getdents */
 			/* 175  old gc_control */
-#define	__NR_add_profil     VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(176)
+           /* iOS 176 missing */
 			/* 177  */
 			/* 178  */
 			/* 179  */
@@ -405,11 +380,7 @@
 #define __NR_sigreturn      VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(184)
 #define __NR_chud           VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(185)
 			/* 186  */
-#if DARWIN_VERS >= DARWIN_10_6
 #define __NR_fdatasync      VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(187)
-#else
-			/* 187  */
-#endif
 #define	__NR_stat           VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(188)
 #define	__NR_fstat          VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(189)
 #define	__NR_lstat          VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(190)
@@ -428,25 +399,9 @@
 #define	__NR_mlock          VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(203)
 #define	__NR_munlock        VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(204)
 #define	__NR_undelete       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(205)
-#define	__NR_ATsocket       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(206)
-#define	__NR_ATgetmsg       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(207)
-#define	__NR_ATputmsg       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(208)
-#define	__NR_ATPsndreq      VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(209)
-#define	__NR_ATPsndrsp      VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(210)
-#define	__NR_ATPgetreq      VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(211)
-#define	__NR_ATPgetrsp      VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(212)
-			/* 213  Reserved for AppleTalk */
-#if DARWIN_VERS >= DARWIN_10_6
-                        /* 214  old kqueue_from_portset_np*/
-                        /* 215  old kqueue_portset_np*/
-#else
-#define __NR_kqueue_from_portset_np VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(214)
-#define __NR_kqueue_portset_np VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(215)
-#endif
+           /* iOS 206-215 missing */
 #define	__NR_mkcomplex      VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(216)
-#define	__NR_statv          VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(217)
-#define	__NR_lstatv         VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(218)
-#define	__NR_fstatv         VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(219)
+           /* iOS 217-219 missing */
 #define	__NR_getattrlist    VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(220)
 #define	__NR_setattrlist    VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(221)
 #define	__NR_getdirentriesattr VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(222)
@@ -455,13 +410,10 @@
 #define	__NR_searchfs       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(225)
 #define	__NR_delete         VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(226)
 #define	__NR_copyfile       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(227)
-#if DARWIN_VERS >= DARWIN_10_6
+
 #define __NR_fgetattrlist   VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(228)
 #define __NR_fsetattrlist   VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(229)
-#else
-			/* 228  */
-			/* 229  */
-#endif
+
 #define	__NR_poll           VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(230)
 #define	__NR_watchevent     VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(231)
 #define	__NR_waitevent      VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(232)
@@ -477,13 +429,10 @@
 #define	__NR_fsctl          VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(242)
 #define	__NR_initgroups     VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(243)
 #define __NR_posix_spawn    VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(244)
-#if DARWIN_VERS >= DARWIN_10_6
 #define __NR_ffsctl         VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(245)
-#else
-			/* 245  */
-#endif
+
 			/* 246  */
-#define __NR_nfsclnt        VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(247)
+#define __NR_nfsclnt       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(247)
 #define __NR_fhopen         VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(248)
 			/* 249  */
 #define	__NR_minherit       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(250)
@@ -510,13 +459,7 @@
 #define	__NR_sem_wait       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(271)
 #define	__NR_sem_trywait    VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(272)
 #define	__NR_sem_post       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(273)
-
-#if DARWIN_VERS < DARWIN_10_10
 #define	__NR_sem_getvalue   VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(274)
-#elif DARWIN_VERS == DARWIN_10_10
-#define	__NR_sysctlbyname   VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(274)
-#endif
-
 #define	__NR_sem_init       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(275)
 #define	__NR_sem_destroy    VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(276)
 #define	__NR_open_extended  VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(277)
@@ -537,16 +480,14 @@
 #define	__NR_mkdir_extended VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(292)
 #define	__NR_identitysvc    VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(293)
 #define	__NR_shared_region_check_np VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(294)
-#define	__NR_shared_region_map_np   VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(295)
-#if DARWIN_VERS >= DARWIN_10_6
+           /* iOS 295 missing */
 #define __NR_vm_pressure_monitor    VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(296)
-#else
-			/* 296  old load_shared_file */
-#endif
-			/* 297  old reset_shared_file */
-			/* 298  old new_system_shared_regions */
-			/* 299  old shared_region_map_file_np */
-			/* 300  old shared_region_make_private_np */
+
+#define __NR_psynch_rw_longrdlock VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(297)
+#define __NR_psynch_rw_yieldwrlock VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(298)
+#define __NR_psynch_rw_downgrade   VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(299)
+#define __NR_psynch_rw_upgrade  VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(300)
+           /* iOS 297-300 new */
 #define __NR_psynch_mutexwait VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(301)
 #define __NR_psynch_mutexdrop VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(302)
 #define __NR_psynch_cvbroad   VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(303)
@@ -555,7 +496,8 @@
 #define __NR_psynch_rw_rdlock VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(306)
 #define __NR_psynch_rw_wrlock VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(307)
 #define __NR_psynch_rw_unlock VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(308)
-			/* 309 */
+#define __NR_psynch_rw_unlock2 VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(309)
+           /* iOS 309 new */
 #define	__NR_getsid         VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(310)
 #define	__NR_settid_with_pid VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(311)
 #define __NR_psynch_cvclrprepost VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(312)
@@ -570,6 +512,7 @@
 			/* 321 */
 #define __NR_iopolicysys    VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(322)
 #define __NR_process_policy VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(323)
+			/* 323  */
 #define	__NR_mlockall       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(324)
 #define	__NR_munlockall     VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(325)
 			/* 326  */
@@ -602,8 +545,7 @@
 			/* 352  */
 #define	__NR_getauid        VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(353)
 #define	__NR_setauid        VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(354)
-#define	__NR_getaudit       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(355)
-#define	__NR_setaudit       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(356)
+           /* iOS 355-356 missing */
 #define	__NR_getaudit_addr  VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(357)
 #define	__NR_setaudit_addr  VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(358)
 #define	__NR_auditctl       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(359)
@@ -616,19 +558,14 @@
 #define __NR_bsdthread_register VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(366)
 #define __NR_workq_open     VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(367)
 #define __NR_workq_ops      VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(368)
-#if DARWIN_VERS >= DARWIN_10_6
 #define __NR_kevent64       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(369)
-#else
-			/* 369  */
-#endif
-			/* 370  */
-			/* 371  */
-#if DARWIN_VERS >= DARWIN_10_6
+
+#define __NR___old_semwait_signal            VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(370)
+#define __NR___old_semwait_signal_nocancel   VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(371)
+           /* iOS 370-371 new */
 #define __NR___thread_selfid VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(372)  // was UX64
-#else
-			/* 372  */
-#endif
-			/* 373  */
+#define __NR_ledger          VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(373)
+           /* iOS 373 new */
 			/* 374  */
 			/* 375  */
 			/* 376  */
@@ -682,17 +619,17 @@
 #define __NR___mac_mount            VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(424)
 #define __NR___mac_get_mount        VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(425)
 #define __NR___mac_getfsstat        VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(426)
-#if DARWIN_VERS >= DARWIN_10_6
 #define __NR_fsgetpath              VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(427)
 #define __NR_audit_session_self     VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(428)
 #define __NR_audit_session_join     VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(429)
-#endif /* DARWIN_VERS >= DARWIN_10_6 */
-#if DARWIN_VERS >= DARWIN_10_9
 #define __NR_fileport_makeport      VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(430)
 #define __NR_fileport_makefd        VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(431)
 #define __NR_audit_session_port     VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(432)
 #define __NR_pid_suspend            VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(433)
 #define __NR_pid_resume             VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(434)
+#define __NR_pid_hibernate             VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(435)
+#define __NR_pid_shutdown_sockets      VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(436)
+           /* iOS 435-436 new */
 
 
 
@@ -714,29 +651,9 @@
 #define __NR_memorystatus_get_level VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(453)
 #define __NR_system_override        VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(454)
 #define __NR_vfs_purge              VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(455)
-#endif /* DARWIN_VERS >= DARWIN_10_9 */
 
-#if DARWIN_VERS >= DARWIN_10_10
-#define __NR_necp_match_policy      VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(460)
-#define __NR_getattrlistbulk        VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(461)
-#define __NR_readlinkat             VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(473)
-#define __NR_bsdthread_ctl          VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(478)
-#define __NR_guarded_open_dprotected_np VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(484)
-#define __NR_guarded_write_np       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(485)
-#define __NR_guarded_pwrite_np      VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(486)
-#define __NR_guarded_writev_np      VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(487)
-#endif
-
-#if DARWIN_VERS < DARWIN_10_6
-#define	__NR_MAXSYSCALL             VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(427)
-#elif DARWIN_VERS < DARWIN_10_7
-#define	__NR_MAXSYSCALL             VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(430)
-#elif DARWIN_VERS < DARWIN_10_9
-#define	__NR_MAXSYSCALL             VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(430)
-#elif DARWIN_VERS == DARWIN_10_9
+#if DARWIN_VERS == DARWIN_IOS_7
 #define	__NR_MAXSYSCALL             VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(456)
-#elif DARWIN_VERS == DARWIN_10_10
-#define __NR_MAXSYSCALL             VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(490)
 #else
 #error unknown darwin version
 #endif

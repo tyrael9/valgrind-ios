@@ -66,6 +66,9 @@ const HChar* VG_(sysnum_string)(Word sysnum)
       case VG_DARWIN_SYSCALL_CLASS_UNIX: classname = "unix"; break;
       case VG_DARWIN_SYSCALL_CLASS_MDEP: classname = "mdep"; break;
       case VG_DARWIN_SYSCALL_CLASS_DIAG: classname = "diag"; break;
+#if defined(VGA_arm)
+      case VG_DARWIN_SYSCALL_CLASS_ML: classname = "ml"; break;
+#endif
       default: classname = "UNKNOWN"; break;
    }
    VG_(sprintf)(buf, "%s:%ld", classname, VG_DARWIN_SYSNO_INDEX(sysnum));

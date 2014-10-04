@@ -274,7 +274,8 @@
 #if defined(VGPV_arm_linux_android) \
     || defined(VGPV_x86_linux_android) \
     || defined(VGPV_mips32_linux_android) \
-    || defined(VGPV_arm64_linux_android)
+    || defined(VGPV_arm64_linux_android) \
+    || defined(VGP_arm_darwin)
 # define VG_N_SEGMENTS 5000
 #else
 # define VG_N_SEGMENTS 30000
@@ -1470,6 +1471,281 @@ static void init_resvn ( /*OUT*/NSegment* seg, Addr start, Addr end )
 /*---                                                           ---*/
 /*-----------------------------------------------------------------*/
 
+#if defined(VGO_darwin)
+
+#  if !defined(VGA_arm)
+#  include <sys/proc_info.h>
+#  endif
+
+static int local_proc_regionfilename(int pid, uint64_t address, 
+                                    void * buffer, uint32_t buffersize)
+{
+#if defined(VGA_arm)
+   struct proc_regioninfo {
+   	uint32_t		pri_protection;
+   	uint32_t		pri_max_protection;
+   	uint32_t		pri_inheritance;
+   	uint32_t		pri_flags;		/* shared, external pager, is submap */
+   	uint64_t		pri_offset;
+   	uint32_t		pri_behavior;
+   	uint32_t		pri_user_wired_count;
+   	uint32_t		pri_user_tag;
+   	uint32_t		pri_pages_resident;
+   	uint32_t		pri_pages_shared_now_private;
+   	uint32_t		pri_pages_swapped_out;
+   	uint32_t		pri_pages_dirtied;
+   	uint32_t		pri_ref_count;
+   	uint32_t		pri_shadow_depth;
+   	uint32_t		pri_share_mode;
+   	uint32_t		pri_private_pages_resident;
+   	uint32_t		pri_shared_pages_resident;
+   	uint32_t		pri_obj_id;
+   	uint32_t		pri_depth;
+   	uint64_t		pri_address;
+   	uint64_t		pri_size;
+   };
+
+   struct vinfo_stat {
+   	uint32_t	vst_dev;	/* [XSI] ID of device containing file */
+   	uint16_t	vst_mode;	/* [XSI] Mode of file (see below) */
+   	uint16_t	vst_nlink;	/* [XSI] Number of hard links */
+   	uint64_t	vst_ino;	/* [XSI] File serial number */
+   	uid_t		vst_uid;	/* [XSI] User ID of the file */
+   	gid_t		vst_gid;	/* [XSI] Group ID of the file */
+   	int64_t		vst_atime;	/* [XSI] Time of last access */
+   	int64_t		vst_atimensec;	/* nsec of last access */
+   	int64_t		vst_mtime;	/* [XSI] Last data modification time */
+   	int64_t		vst_mtimensec;	/* last data modification nsec */
+   	int64_t		vst_ctime;	/* [XSI] Time of last status change */
+   	int64_t		vst_ctimensec;	/* nsec of last status change */
+   	int64_t		vst_birthtime;	/*  File creation time(birth)  */
+   	int64_t		vst_birthtimensec;	/* nsec of File creation time */
+   	off_t		vst_size;	/* [XSI] file size, in bytes */
+   	int64_t		vst_blocks;	/* [XSI] blocks allocated for file */
+   	int32_t		vst_blksize;	/* [XSI] optimal blocksize for I/O */
+   	uint32_t	vst_flags;	/* user defined flags for file */
+   	uint32_t	vst_gen;	/* file generation number */
+   	uint32_t	vst_rdev;	/* [XSI] Device ID */
+   	int64_t		vst_qspare[2];	/* RESERVED: DO NOT USE! */
+   };
+
+   struct vnode_info {
+   	struct vinfo_stat	vi_stat;
+   	int			vi_type;
+   	int			vi_pad;
+   	fsid_t			vi_fsid;
+   };
+
+   struct vnode_info_path {
+   	struct vnode_info	vip_vi;
+   	char			vip_path[MAXPATHLEN];	/* tail end of it  */
+   };
+
+   struct proc_regionwithpathinfo {
+   	struct proc_regioninfo	prp_prinfo;
+   	struct vnode_info_path	prp_vip;
+   };
+
+#define PROC_PIDREGIONPATHINFO		8
+#define PROC_PIDREGIONPATHINFO_SIZE	(sizeof(struct proc_regionwithpathinfo))
+   
+#endif
+   
+   SysRes res;
+	int len;
+	struct proc_regionwithpathinfo reginfo;
+	
+	if (buffersize < MAXPATHLEN) {
+		errno = ENOMEM;
+		return(0);
+	}
+#if defined(VGA_x86) || defined(VGA_arm)
+	res = VG_(do_syscall7)(__NR_proc_info, 2, pid, PROC_PIDREGIONPATHINFO, 
+                           address & 0xffffffff, address >> 32, (UWord)&reginfo, 
+                           sizeof(struct proc_regionwithpathinfo));
+#elif defined(VGA_amd64)
+	res = VG_(do_syscall6)(__NR_proc_info, 2, pid, PROC_PIDREGIONPATHINFO, 
+                           address, (UWord)&reginfo, 
+                           sizeof(struct proc_regionwithpathinfo));
+#else
+#error Unknown platform
+#endif
+	if (!sr_isError(res)) {
+		len = VG_(strlen)(&reginfo.prp_vip.vip_path[0]);
+		if (len != 0) {
+			if (len > MAXPATHLEN)
+				len = MAXPATHLEN;
+			VG_(memcpy)(buffer, &reginfo.prp_vip.vip_path[0], len);
+			return(len);
+		}
+		return(0);
+	}
+	return(0);
+			
+}
+
+static Addr local_shared_region_check_np()
+{
+   SysRes res;
+   uint64_t addr = 0;
+   
+	res = VG_(do_syscall1)(__NR_shared_region_check_np, (UWord)(&addr));
+
+	if (!sr_isError(res)) {
+      if (sr_Res(res) == 0) {
+         return (Addr)addr;
+      }
+      return(0);
+   }
+   return(0);
+}
+
+static int local_check_and_get_shared_cache_path(Addr dyld_shared_cache_start,
+                                 Addr addr, SizeT len, HChar *filename )
+{
+   struct dyld_cache_header
+   {
+   	char		magic[16];				// e.g. "dyld_v0    i386"
+   	uint32_t	mappingOffset;			// file offset to first dyld_cache_mapping_info
+   	uint32_t	mappingCount;			// number of dyld_cache_mapping_info entries
+   	uint32_t	imagesOffset;			// file offset to first dyld_cache_image_info
+   	uint32_t	imagesCount;			// number of dyld_cache_image_info entries
+   	uint64_t	dyldBaseAddress;		// base address of dyld when cache was built
+   	uint64_t	codeSignatureOffset;	// file offset of code signature blob
+   	uint64_t	codeSignatureSize;		// size of code signature blob (zero means to end of file)
+   	uint64_t	slideInfoOffset;		// file offset of kernel slid info
+   	uint64_t	slideInfoSize;			// size of kernel slid info
+   	uint64_t	localSymbolsOffset;		// file offset of where local symbols are stored
+   	uint64_t	localSymbolsSize;		// size of local symbols information
+   	uint8_t		uuid[16];				// unique value for each shared cache file
+   };
+
+   struct dyld_cache_mapping_info {
+   	uint64_t	address;
+   	uint64_t	size;
+   	uint64_t	fileOffset;
+   	uint32_t	maxProt;
+   	uint32_t	initProt;
+   };
+
+   struct dyld_cache_image_info
+   {
+   	uint64_t	address;
+   	uint64_t	modTime;
+   	uint64_t	inode;
+   	uint32_t	pathFileOffset;
+   	uint32_t	pad;
+   };
+
+   struct dyld_cache_slide_info
+   {
+   	uint32_t	version;		// currently 1
+   	uint32_t	toc_offset;
+   	uint32_t	toc_count;
+   	uint32_t	entries_offset;
+   	uint32_t	entries_count;
+   	uint32_t	entries_size;  // currently 128 
+   	// uint16_t toc[toc_count];
+   	// entrybitmap entries[entries_count];
+   };
+
+
+   struct dyld_cache_local_symbols_info
+   {
+   	uint32_t	nlistOffset;		// offset into this chunk of nlist entries
+   	uint32_t	nlistCount;			// count of nlist entries
+   	uint32_t	stringsOffset;		// offset into this chunk of string pool
+   	uint32_t	stringsSize;		// byte count of string pool
+   	uint32_t	entriesOffset;		// offset into this chunk of array of dyld_cache_local_symbols_entry 
+   	uint32_t	entriesCount;		// number of elements in dyld_cache_local_symbols_entry array
+   };
+
+   struct dyld_cache_local_symbols_entry
+   {
+   	uint32_t	dylibOffset;		// offset in cache file of start of dylib
+   	uint32_t	nlistStartIndex;	// start index of locals for this dylib
+   	uint32_t	nlistCount;			// number of local symbols for this dylib
+   };
+
+   #define MACOSX_DYLD_SHARED_CACHE_DIR	"/var/db/dyld/"
+   #define IPHONE_DYLD_SHARED_CACHE_DIR	"/System/Library/Caches/com.apple.dyld/"
+   #define DYLD_SHARED_CACHE_BASE_NAME		"dyld_shared_cache_"
+   #define DYLD_CACHE_MAGIC               "dyld_v1"
+   #define DYLD_CACHE_MAGIC_LEN           7
+   
+   // Make sure it's valid dyld cache
+   struct dyld_cache_header *pheader = 
+      (struct dyld_cache_header *)dyld_shared_cache_start;
+   
+   if ((pheader->magic[15] != 0) || (VG_(memcmp)(pheader->magic, 
+         DYLD_CACHE_MAGIC, DYLD_CACHE_MAGIC_LEN) != 0)) {
+      VG_(debugLog)(1, "aspacem", "invalid dyld cache");
+      return(0);
+   }
+
+   // ZD: fixme check vaild arch
+   HChar *arch_name = NULL;
+   for(Int i = 14; i >= DYLD_CACHE_MAGIC_LEN; i--) {
+      if(pheader->magic[i] == ' ') {
+         arch_name = (HChar *)(&(pheader->magic[i+1]));
+         break;
+      }
+   }
+   
+   if (!arch_name) {
+      VG_(debugLog)(1, "aspacem", "invalid dyld cache arch");
+      return(0);
+   }
+   
+   // Check if the address is in one of the mappings for dyld shared cache
+   Bool found = False;
+   struct dyld_cache_mapping_info *mappings = 
+      (struct dyld_cache_mapping_info *)(dyld_shared_cache_start + 
+         pheader->mappingOffset);
+
+   uint64_t slide = dyld_shared_cache_start - mappings[0].address;
+   for(uint32_t i = 0; i < pheader->mappingCount; i++) {
+      if ((addr >= mappings[i].address + slide) && 
+         (addr + len <= mappings[i].address + mappings[i].size + slide)) {
+            found = True;
+            break;
+      }
+   }
+   
+   // dyld will map the code signature as one additional mapping,
+   // right after the last mapping indicated in the cache. Check for it.
+   // ZD: fixme check length
+   if (!found) {
+      if (addr == mappings[pheader->mappingCount - 1].address + 
+                  mappings[pheader->mappingCount - 1].size + slide) {
+         found = True;      
+      }
+   }
+   
+   if (found) {
+      if (filename) {
+#if defined(VGA_arm)
+      ML_(am_sprintf)(filename, "%s%s%s", IPHONE_DYLD_SHARED_CACHE_DIR, 
+         DYLD_SHARED_CACHE_BASE_NAME, arch_name);
+#else
+      ML_(am_sprintf)(filename, "%s%s%s", MACOSX_DYLD_SHARED_CACHE_DIR, 
+         DYLD_SHARED_CACHE_BASE_NAME, arch_name);
+#endif 
+      }
+      return(1);
+   }
+   
+   return(0);
+   
+   #undef MACOSX_DYLD_SHARED_CACHE_DIR
+   #undef IPHONE_DYLD_SHARED_CACHE_DIR
+   #undef DYLD_SHARED_CACHE_BASE_NAME
+   #undef DYLD_CACHE_MAGIC
+   #undef DYLD_CACHE_MAGIC_LEN
+}
+
+#endif //defined(VGO_darwin)
+
 static void read_maps_callback ( Addr addr, SizeT len, UInt prot,
                                  ULong dev, ULong ino, Off64T offset, 
                                  const HChar* filename )
@@ -1498,6 +1774,29 @@ static void read_maps_callback ( Addr addr, SizeT len, UInt prot,
    // GrP fixme no dev/ino on darwin
    if (offset != 0) 
       seg.kind = SkFileV;
+
+   HChar buf[MAXPATHLEN];
+   
+   // Check for dyld shared cache
+   // Change the ownership to client, as V does not use any of these
+   // dyld shared caches
+   Addr dyld_shared_cache_start = local_shared_region_check_np();
+   if ((dyld_shared_cache_start) && (addr >= dyld_shared_cache_start)) {
+      if (local_check_and_get_shared_cache_path (dyld_shared_cache_start, 
+            addr, len, buf)) {
+         filename = buf;
+         seg.kind = SkFileC;
+      }
+   }
+   
+   // If file name still is null, try call proc_regionfilename
+   // to get the mapped file
+   if (filename == NULL) {
+      if (local_proc_regionfilename(ML_(am_getpid)(), addr, buf, sizeof(buf))) {
+         filename = buf;
+         seg.kind = SkFileV;
+      }
+   }
 #  endif // defined(VGO_darwin)
 
 #  if defined(VGP_arm_linux)
@@ -1578,6 +1877,13 @@ Addr VG_(am_startup) ( Addr sp_at_startup )
 
 #if defined(VGO_darwin)
 
+# if defined(VGA_arm)
+   aspacem_minAddr = (Addr) 0x00001000;
+   aspacem_maxAddr = (Addr) 0x3fffffff;
+
+   aspacem_cStart = aspacem_minAddr;
+   aspacem_vStart = 0x18000000;  // 0x18000000..0x27d00000 available
+# else
 # if VG_WORDSIZE == 4
    aspacem_maxAddr = (Addr) 0xffffffff;
 
@@ -1589,6 +1895,7 @@ Addr VG_(am_startup) ( Addr sp_at_startup )
    aspacem_cStart = aspacem_minAddr;
    aspacem_vStart = 0x700000000000; // 0x7000:00000000..0x7fff:5c000000 avail
    // 0x7fff:5c000000..0x7fff:ffe00000? is stack, dyld, shared cache
+# endif
 # endif
 
    suggested_clstack_end = -1; // ignored; Mach-O specifies its stack
@@ -3359,7 +3666,22 @@ static void parse_procselfmaps (
 
 #elif defined(VGO_darwin)
 #include <mach/mach.h>
+#if !defined(VGA_arm)
 #include <mach/mach_vm.h>
+#else
+// This function is hidden in iOS, but it's present, and exported
+// in libSystem.
+extern kern_return_t mach_vm_region_recurse
+(
+	vm_map_t target_task,
+	mach_vm_address_t *address,
+	mach_vm_size_t *size,
+	natural_t *nesting_depth,
+	vm_region_recurse_info_t info,
+	mach_msg_type_number_t *infoCnt
+);
+
+#endif
 
 static unsigned int mach2vki(unsigned int vm_prot)
 {

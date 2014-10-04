@@ -548,6 +548,34 @@ __asm__(
 
 #endif /* VGP_x86_linux || VGP_x86_darwin */
 
+#if defined(VGP_arm_darwin)
+
+__asm__(
+".text"  "\n"
+""       "\n"
+".globl _VG_MINIMAL_SETJMP"  "\n"  // r0 = jmp_buf
+".align 4;                      \n\t"
+"_VG_MINIMAL_SETJMP:"  "\n"
+"stmia   r0, {r4-r14}   \n"       //44 bytes
+"mov     r0, #0         \n"       //return zero
+"bx      lr             \n"
+""                     "\n"
+      
+".globl _VG_MINIMAL_LONGJMP"  "\n"
+".align 4;                      \n\t"
+"_VG_MINIMAL_LONGJMP:" "\n"     // r0 = jmp_buf
+"ldmia   r0, {r4-r14}   \n"
+"cmp     r1, #0         \n"
+"bne     1f             \n"
+"mov     r1, #1         \n"
+"1:                     \n"
+"mov     r0, r1         \n"
+"bx      lr             \n"
+""                     "\n"
+);
+
+#endif /* VGP_arm_darwin */
+
 #if defined(VGP_mips32_linux)
 
 __asm__(

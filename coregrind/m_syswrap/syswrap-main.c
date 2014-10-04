@@ -84,11 +84,26 @@
    DARWIN:
    x86    eax   +4   +8   +12  +16  +20  +24  +28  +32  edx:eax, eflags.c
    amd64  rax   rdi  rsi  rdx  rcx  r8   r9   +8   +16  rdx:rax, rflags.c
+   arm    r12 	r0   r1   r2   r3   r4   r5   r6   +28|r8  r1:r0, cpsr.c
+arm-indir r0  	r1   r2   r3   r4   r5   r6   +28  +32     r1:r0, cpsr.c
 
    For x86-darwin, "+N" denotes "in memory at N(%esp)"; ditto
    amd64-darwin.  Apparently 0(%esp) is some kind of return address
    (perhaps for syscalls done with "sysenter"?)  I don't think it is
    relevant for syscalls done with "int $0x80/1/2".
+
+   For arm-darwin (i.e. iOS), it uses at most 7 registers to pass arguments.
+   The 8th arguments begins at [sp, #28]. Why? Let's assume there are total X
+   arguments, X > 7. When usermode calls system call wrappers, it will push
+   the last (X-4) arguments to the stack. However, the system call wrapper
+   will get 3 of them from the stack and put them into r4-r6. This means the
+   system call wrapper has to save r4-r6 on the stack. But, the stack has
+   to be 8-byte aligned according to ARM standard. Hence, the r8 register
+   is pushed on the stack, so it total becomes 16 bytes. And the kernel only
+   need to get the last (X-7) arguments, which means it has to skip 3 more
+   arguments (which are already in r4-r6) on the stack. That adds to 28 
+   bytes. Interesting, huh? For MACH system calls the 8th argument is passed
+   using R8!!!!???
 */
 
 /* This is the top level of the system-call handler module.  All
@@ -334,6 +349,14 @@ void do_syscall_for_client ( Int syscallno,
                   syscall_mask, &saved, 0/*unused:sigsetSzB*/
                );
          break;
+#if defined(VGA_arm)
+      case VG_DARWIN_SYSCALL_CLASS_ML:
+         err = ML_(do_syscall_for_client_mach_WRK)(
+                  VG_DARWIN_SYSNO_FOR_KERNEL(syscallno), &tst->arch.vex, 
+                  syscall_mask, &saved, 0/*unused:sigsetSzB*/
+               );
+         break;
+#endif
       default:
          vg_assert(0);
          /*NOTREACHED*/
@@ -400,11 +423,18 @@ SyscallStatus convert_SysRes_to_SyscallStatus ( SysRes res )
 /* Impedance matchers.  These convert syscall arg or result data from
    the platform-specific in-guest-state format to the canonical
    formats, and back. */
-
+#if defined(VGO_darwin)
+static 
+void getSyscallArgsFromGuestState ( /*OUT*/SyscallArgs*       canonical,
+                                    /*IN*/ VexGuestArchState* gst_vanilla, 
+                                    /*IN*/ UInt trc,
+                                    /*OUT*/Bool* indirect )
+#else
 static 
 void getSyscallArgsFromGuestState ( /*OUT*/SyscallArgs*       canonical,
                                     /*IN*/ VexGuestArchState* gst_vanilla, 
                                     /*IN*/ UInt trc )
+#endif
 {
 #if defined(VGP_x86_linux)
    VexGuestX86State* gst = (VexGuestX86State*)gst_vanilla;
@@ -534,6 +564,7 @@ void getSyscallArgsFromGuestState ( /*OUT*/SyscallArgs*       canonical,
       canonical->arg6  = stack[6];
       canonical->arg7  = stack[7];
       canonical->arg8  = stack[8];
+      *indirect = FALSE;
    } else {
       // GrP fixme hack handle syscall()
       // GrP fixme what about __syscall() ?
@@ -551,6 +582,7 @@ void getSyscallArgsFromGuestState ( /*OUT*/SyscallArgs*       canonical,
       canonical->arg6  = stack[7];
       canonical->arg7  = stack[8];
       canonical->arg8  = stack[9];
+      *indirect = TRUE;
       
       PRINT("SYSCALL[%d,?](0) syscall(%s, ...); please stand by...\n",
             VG_(getpid)(), /*tid,*/
@@ -613,6 +645,7 @@ void getSyscallArgsFromGuestState ( /*OUT*/SyscallArgs*       canonical,
       canonical->arg6  = gst->guest_R9;
       canonical->arg7  = stack[1];
       canonical->arg8  = stack[2];
+      *indirect = FALSE;
    } else {
       // GrP fixme hack handle syscall()
       // GrP fixme what about __syscall() ?
@@ -630,6 +663,7 @@ void getSyscallArgsFromGuestState ( /*OUT*/SyscallArgs*       canonical,
       canonical->arg6  = stack[1];
       canonical->arg7  = stack[2];
       canonical->arg8  = stack[3];
+      *indirect = TRUE;
       
       PRINT("SYSCALL[%d,?](0) syscall(%s, ...); please stand by...\n",
             VG_(getpid)(), /*tid,*/
@@ -637,6 +671,99 @@ void getSyscallArgsFromGuestState ( /*OUT*/SyscallArgs*       canonical,
    }
 
    // no canonical->sysno adjustment needed
+   
+#elif defined(VGP_arm_darwin)
+   VexGuestARMState* gst = (VexGuestARMState*)gst_vanilla;
+   UWord *stack = (UWord *)gst->guest_R13;
+   // GrP fixme hope syscalls aren't called with really shallow stacks...
+   canonical->sysno = gst->guest_R12;
+   if (*(UWord *)(&(canonical->sysno)) == 0x80000000UL) {
+      // MDEP
+      canonical->sysno = gst->guest_R3;
+      canonical->arg1  = gst->guest_R0;
+      canonical->arg2  = gst->guest_R1;
+      canonical->arg3  = gst->guest_R2;
+      canonical->arg4  = 0;
+      canonical->arg5  = 0;
+      canonical->arg6  = 0;
+      canonical->arg7  = 0;
+      canonical->arg8  = 0;
+      *indirect = FALSE;
+      
+      canonical->sysno = VG_DARWIN_SYSCALL_CONSTRUCT_MDEP(canonical->sysno);
+   }
+   else if (canonical->sysno == 0) {
+      // UNIX, indirect
+      // GrP fixme hack handle syscall()
+      // GrP fixme what about __syscall() ?
+      // stack[0] is return address
+      // DDD: the tool can't see that the params have been shifted!  Can
+      //      lead to incorrect checking, I think, because the PRRAn/PSARn
+      //      macros will mention the pre-shifted args.
+      canonical->sysno = gst->guest_R0;
+      vg_assert(canonical->sysno != 0);
+      canonical->arg1  = gst->guest_R1;
+      canonical->arg2  = gst->guest_R2;
+      canonical->arg3  = gst->guest_R3;
+      canonical->arg4  = gst->guest_R4;
+      canonical->arg5  = gst->guest_R5;
+      canonical->arg6  = gst->guest_R6;
+      canonical->arg7  = stack[7];
+      canonical->arg8  = stack[8];
+      *indirect = TRUE;
+      
+      PRINT("SYSCALL[%d,?](%s) syscall(%s, ...); please stand by...\n",
+            VG_(getpid)(), /*tid,*/
+            VG_SYSNUM_STRING(0), VG_SYSNUM_STRING(canonical->sysno));
+      
+      canonical->sysno = VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(canonical->sysno);
+   }
+   else if (canonical->sysno == -3) {
+      // ML
+      canonical->arg1  = 0;
+      canonical->arg2  = 0;
+      canonical->arg3  = 0;
+      canonical->arg4  = 0;
+      canonical->arg5  = 0;
+      canonical->arg6  = 0;
+      canonical->arg7  = 0;
+      canonical->arg8  = 0;
+      canonical->sysno = VG_DARWIN_SYSCALL_CONSTRUCT_ML(-canonical->sysno);
+      *indirect = FALSE;
+   }
+   else { 
+      *indirect = FALSE;
+      
+      if (canonical->sysno > 0) {
+         // UNIX, direct
+         canonical->arg1  = gst->guest_R0;
+         canonical->arg2  = gst->guest_R1;
+         canonical->arg3  = gst->guest_R2;
+         canonical->arg4  = gst->guest_R3;
+         canonical->arg5  = gst->guest_R4;
+         canonical->arg6  = gst->guest_R5;
+         canonical->arg7  = gst->guest_R6;
+         canonical->arg8  = stack[7];
+         
+         canonical->sysno = VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(canonical->sysno);
+      }
+      else if (canonical->sysno < 0) {
+         // MACH
+         canonical->arg1  = gst->guest_R0;
+         canonical->arg2  = gst->guest_R1;
+         canonical->arg3  = gst->guest_R2;
+         canonical->arg4  = gst->guest_R3;
+         canonical->arg5  = gst->guest_R4;
+         canonical->arg6  = gst->guest_R5;
+         canonical->arg7  = gst->guest_R6;
+         canonical->arg8  = gst->guest_R8;
+         
+         canonical->sysno = VG_DARWIN_SYSCALL_CONSTRUCT_MACH(-canonical->sysno);
+      }
+      else {
+         vg_assert(0);
+      }
+   }
 
 #elif defined(VGP_s390x_linux)
    VexGuestS390XState* gst = (VexGuestS390XState*)gst_vanilla;
@@ -764,6 +891,53 @@ void putSyscallArgsIntoGuestState ( /*IN*/ SyscallArgs*       canonical,
    gst->guest_R9  = canonical->arg6;
    stack[1]       = canonical->arg7;
    stack[2]       = canonical->arg8;
+   
+#elif defined(VGP_arm_darwin)
+   VexGuestARMState* gst = (VexGuestARMState*)gst_vanilla;
+   UWord *stack = (UWord *)gst->guest_R13;
+   UInt guest_sc_class = VG_DARWIN_SYSNO_CLASS(canonical->sysno);
+   Int tmp = 0;
+   
+   switch(guest_sc_class) {
+      case VG_DARWIN_SYSCALL_CLASS_UNIX:
+         gst->guest_R0 = canonical->arg1;
+         gst->guest_R1 = canonical->arg2;
+         gst->guest_R2 = canonical->arg3;
+         gst->guest_R3 = canonical->arg4;
+         gst->guest_R4 = canonical->arg5;
+         gst->guest_R5 = canonical->arg6;
+         gst->guest_R6 = canonical->arg7;
+         stack[7] = canonical->arg8;
+         gst->guest_R12 = VG_DARWIN_SYSNO_FOR_KERNEL(canonical->sysno);
+         break;
+      case VG_DARWIN_SYSCALL_CLASS_MACH:
+         gst->guest_R0 = canonical->arg1;
+         gst->guest_R1 = canonical->arg2;
+         gst->guest_R2 = canonical->arg3;
+         gst->guest_R3 = canonical->arg4;
+         gst->guest_R4 = canonical->arg5;
+         gst->guest_R5 = canonical->arg6;
+         gst->guest_R6 = canonical->arg7;
+         gst->guest_R8 = canonical->arg8;
+         tmp = VG_DARWIN_SYSNO_FOR_KERNEL(canonical->sysno);
+         gst->guest_R12 = *(UInt *)(&tmp);
+         break;
+      case VG_DARWIN_SYSCALL_CLASS_MDEP:
+         gst->guest_R0 = canonical->arg1;
+         gst->guest_R1 = canonical->arg2;
+         gst->guest_R2 = canonical->arg3;
+         gst->guest_R12 = 0x80000000;
+         gst->guest_R3 = VG_DARWIN_SYSNO_FOR_KERNEL(canonical->sysno);
+         break;
+      case VG_DARWIN_SYSCALL_CLASS_ML:
+         tmp = VG_DARWIN_SYSNO_FOR_KERNEL(canonical->sysno);
+         gst->guest_R12 = *(UInt *)(&tmp);
+         break;
+      default:
+         vg_assert(0);
+         /*NOTREACHED*/
+         break;
+   }
 
 #elif defined(VGP_s390x_linux)
    VexGuestS390XState* gst = (VexGuestS390XState*)gst_vanilla;
@@ -935,6 +1109,43 @@ void getSyscallStatusFromGuestState ( /*OUT*/SyscallStatus*     canonical,
          break;
    }
    canonical->sres = VG_(mk_SysRes_amd64_darwin)(
+                        gst->guest_SC_CLASS, err ? True : False, 
+                        wHI, wLO
+                     );
+   canonical->what = SsComplete;
+   
+#  elif defined(VGP_arm_darwin)
+   /* duplicates logic in m_signals.VG_UCONTEXT_SYSCALL_SYSRES */
+   VexGuestARMState* gst = (VexGuestARMState*)gst_vanilla;
+   UInt carry = (1 << 29) & LibVEX_GuestARM_get_cpsr(gst);
+   UInt err = 0;
+   UInt wLO = 0;
+   UInt wHI = 0;
+   switch (gst->guest_SC_CLASS) {
+      case VG_DARWIN_SYSCALL_CLASS_UNIX:
+         // Unix, 64-bit result
+         err = carry;
+         wLO = gst->guest_R0;
+         wHI = gst->guest_R1;
+         break;
+      case VG_DARWIN_SYSCALL_CLASS_MACH:
+         // Mach, 32-bit result
+         wLO = gst->guest_R0;
+         break;
+      case VG_DARWIN_SYSCALL_CLASS_MDEP:
+         // mdep, 32-bit result
+         wLO = gst->guest_R0;
+         break;
+      case VG_DARWIN_SYSCALL_CLASS_ML:
+         // ml, 64-bit result
+         wLO = gst->guest_R0;
+         wHI = gst->guest_R1;
+         break;
+      default: 
+         vg_assert(0);
+         break;
+   }
+   canonical->sres = VG_(mk_SysRes_arm_darwin)(
                         gst->guest_SC_CLASS, err ? True : False, 
                         wHI, wLO
                      );
@@ -1118,6 +1329,47 @@ void putSyscallStatusIntoGuestState ( /*IN*/ ThreadId tid,
          break;
    }
    
+#elif defined(VGP_arm_darwin)
+   VexGuestARMState* gst = (VexGuestARMState*)gst_vanilla;
+   SysRes sres = canonical->sres;
+   vg_assert(canonical->what == SsComplete);
+   /* Unfortunately here we have to break abstraction and look
+      directly inside 'res', in order to decide what to do. */
+   switch (sres._mode) {
+      case SysRes_MACH: // Mach, 32-bit result
+      case SysRes_MDEP: // mdep, 32-bit result
+         gst->guest_R0 = sres._wLO;
+         VG_TRACK( post_reg_write, Vg_CoreSysCall, tid, 
+                   OFFSET_arm_R0, sizeof(UInt) );
+         break;
+      case SysRes_ML: // ML, 64-bit result
+         gst->guest_R0 = sres._wLO;
+         VG_TRACK( post_reg_write, Vg_CoreSysCall, tid, 
+                   OFFSET_arm_R0, sizeof(UInt) );
+         gst->guest_R1 = sres._wHI;
+         VG_TRACK( post_reg_write, Vg_CoreSysCall, tid, 
+                   OFFSET_arm_R1, sizeof(UInt) );
+         break;
+      case SysRes_UNIX_OK:  // Unix, 64-bit result
+      case SysRes_UNIX_ERR: // Unix, error
+         gst->guest_R0 = sres._wLO;
+         VG_TRACK( post_reg_write, Vg_CoreSysCall, tid, 
+                   OFFSET_arm_R0, sizeof(UInt) );
+         gst->guest_R1 = sres._wHI;
+         VG_TRACK( post_reg_write, Vg_CoreSysCall, tid, 
+                   OFFSET_arm_R1, sizeof(UInt) );
+         LibVEX_GuestARM_put_cpsr_c( sres._mode==SysRes_UNIX_ERR ? 1 : 0,
+                                      gst );
+         // GrP fixme sets defined for entire eflags, not just bit c
+         // DDD: this breaks exp-ptrcheck.
+         VG_TRACK( post_reg_write, Vg_CoreSysCall, tid, 
+                   offsetof(VexGuestARMState, guest_CC_DEP1), sizeof(UInt) );
+         break;
+      default: 
+         vg_assert(0);
+         break;
+   }
+      
 #  elif defined(VGP_s390x_linux)
    VexGuestS390XState* gst = (VexGuestS390XState*)gst_vanilla;
    vg_assert(canonical->what == SsComplete);
@@ -1184,9 +1436,13 @@ void putSyscallStatusIntoGuestState ( /*IN*/ ThreadId tid,
 /* Tell me the offsets in the guest state of the syscall params, so
    that the scalar argument checkers don't have to have this info
    hardwired. */
-
+#if defined(VGO_darwin)
+static
+void getSyscallArgLayout ( /*OUT*/SyscallArgLayout* layout, Int sysno, Bool indirect )
+#else
 static
 void getSyscallArgLayout ( /*OUT*/SyscallArgLayout* layout )
+#endif
 {
    VG_(bzero_inline)(layout, sizeof(*layout));
 
@@ -1279,27 +1535,194 @@ void getSyscallArgLayout ( /*OUT*/SyscallArgLayout* layout )
    layout->uu_arg8  = -1; /* impossible value */
 
 #elif defined(VGP_x86_darwin)
-   layout->o_sysno  = OFFSET_x86_EAX;
-   // syscall parameters are on stack in C convention
-   layout->s_arg1   = sizeof(UWord) * 1;
-   layout->s_arg2   = sizeof(UWord) * 2;
-   layout->s_arg3   = sizeof(UWord) * 3;
-   layout->s_arg4   = sizeof(UWord) * 4;
-   layout->s_arg5   = sizeof(UWord) * 5;
-   layout->s_arg6   = sizeof(UWord) * 6;
-   layout->s_arg7   = sizeof(UWord) * 7;
-   layout->s_arg8   = sizeof(UWord) * 8;
+   if (indirect) {
+      layout->osflags  = 0;
+      layout->s_sysno  = sizeof(UWord) * 1;
+      layout->osflags  |= (SyscallArgLayout_STACK << 0);
+      layout->s_arg1   = sizeof(UWord) * 2;
+      layout->osflags  |= (SyscallArgLayout_STACK << 1);
+      layout->s_arg2   = sizeof(UWord) * 3;
+      layout->osflags  |= (SyscallArgLayout_STACK << 2);
+      layout->s_arg3   = sizeof(UWord) * 4;
+      layout->osflags  |= (SyscallArgLayout_STACK << 3);
+      layout->s_arg4   = sizeof(UWord) * 5;
+      layout->osflags  |= (SyscallArgLayout_STACK << 4);
+      layout->s_arg5   = sizeof(UWord) * 6;
+      layout->osflags  |= (SyscallArgLayout_STACK << 5);
+      layout->s_arg6   = sizeof(UWord) * 7;
+      layout->osflags  |= (SyscallArgLayout_STACK << 6);
+      layout->s_arg7   = sizeof(UWord) * 8;
+      layout->osflags  |= (SyscallArgLayout_STACK << 7);
+      layout->s_arg8   = sizeof(UWord) * 9;
+      layout->osflags  |= (SyscallArgLayout_STACK << 8);
+   }
+   else {
+      layout->osflags  = 0;
+      layout->o_sysno  = OFFSET_x86_EAX;
+      layout->osflags  |= (SyscallArgLayout_REG << 0);
+      // syscall parameters are on stack in C convention
+      layout->s_arg1   = sizeof(UWord) * 1;
+      layout->osflags  |= (SyscallArgLayout_STACK << 1);
+      layout->s_arg2   = sizeof(UWord) * 2;
+      layout->osflags  |= (SyscallArgLayout_STACK << 2);
+      layout->s_arg3   = sizeof(UWord) * 3;
+      layout->osflags  |= (SyscallArgLayout_STACK << 3);
+      layout->s_arg4   = sizeof(UWord) * 4;
+      layout->osflags  |= (SyscallArgLayout_STACK << 4);
+      layout->s_arg5   = sizeof(UWord) * 5;
+      layout->osflags  |= (SyscallArgLayout_STACK << 5);
+      layout->s_arg6   = sizeof(UWord) * 6;
+      layout->osflags  |= (SyscallArgLayout_STACK << 6);
+      layout->s_arg7   = sizeof(UWord) * 7;
+      layout->osflags  |= (SyscallArgLayout_STACK << 7);
+      layout->s_arg8   = sizeof(UWord) * 8;
+      layout->osflags  |= (SyscallArgLayout_STACK << 8);
+   }
    
 #elif defined(VGP_amd64_darwin)
-   layout->o_sysno  = OFFSET_amd64_RAX;
-   layout->o_arg1   = OFFSET_amd64_RDI;
-   layout->o_arg2   = OFFSET_amd64_RSI;
-   layout->o_arg3   = OFFSET_amd64_RDX;
-   layout->o_arg4   = OFFSET_amd64_RCX;
-   layout->o_arg5   = OFFSET_amd64_R8;
-   layout->o_arg6   = OFFSET_amd64_R9;
-   layout->s_arg7   = sizeof(UWord) * 1;
-   layout->s_arg8   = sizeof(UWord) * 2;
+   if (indirect) {
+      layout->osflags  = 0;
+      layout->o_sysno  = OFFSET_amd64_RDI;
+      layout->osflags  |= (SyscallArgLayout_REG << 0);
+      layout->o_arg1   = OFFSET_amd64_RSI;
+      layout->osflags  |= (SyscallArgLayout_REG << 1);
+      layout->o_arg2   = OFFSET_amd64_RDX;
+      layout->osflags  |= (SyscallArgLayout_REG << 2);
+      layout->o_arg3   = OFFSET_amd64_R10;
+      layout->osflags  |= (SyscallArgLayout_REG << 3);
+      layout->o_arg4   = OFFSET_amd64_R8;
+      layout->osflags  |= (SyscallArgLayout_REG << 4);
+      layout->o_arg5   = OFFSET_amd64_R9;
+      layout->osflags  |= (SyscallArgLayout_REG << 5);
+      layout->s_arg6   = sizeof(UWord) * 1;
+      layout->osflags  |= (SyscallArgLayout_STACK << 6);
+      layout->s_arg7   = sizeof(UWord) * 2;
+      layout->osflags  |= (SyscallArgLayout_STACK << 7);
+      layout->s_arg8   = sizeof(UWord) * 3;
+      layout->osflags  |= (SyscallArgLayout_STACK << 8);
+   }
+   else {
+      layout->osflags  = 0;
+      layout->o_sysno  = OFFSET_amd64_RAX;
+      layout->osflags  |= (SyscallArgLayout_REG << 0);
+      layout->o_arg1   = OFFSET_amd64_RDI;
+      layout->osflags  |= (SyscallArgLayout_REG << 1);
+      layout->o_arg2   = OFFSET_amd64_RSI;
+      layout->osflags  |= (SyscallArgLayout_REG << 2);
+      layout->o_arg3   = OFFSET_amd64_RDX;
+      layout->osflags  |= (SyscallArgLayout_REG << 3);
+      layout->o_arg4   = OFFSET_amd64_R10;
+      layout->osflags  |= (SyscallArgLayout_REG << 4);
+      layout->o_arg5   = OFFSET_amd64_R8;
+      layout->osflags  |= (SyscallArgLayout_REG << 5);
+      layout->o_arg6   = OFFSET_amd64_R9;
+      layout->osflags  |= (SyscallArgLayout_REG << 6);
+      layout->s_arg7   = sizeof(UWord) * 1;
+      layout->osflags  |= (SyscallArgLayout_STACK << 7);
+      layout->s_arg8   = sizeof(UWord) * 2;
+      layout->osflags  |= (SyscallArgLayout_STACK << 8);
+   }
+
+#elif defined(VGP_arm_darwin)
+   if (indirect) {
+      layout->osflags  = 0;
+      layout->o_sysno  = OFFSET_arm_R0;
+      layout->osflags  |= (SyscallArgLayout_REG << 0);
+      layout->o_arg1   = OFFSET_arm_R1;
+      layout->osflags  |= (SyscallArgLayout_REG << 1);
+      layout->o_arg2   = OFFSET_arm_R2;
+      layout->osflags  |= (SyscallArgLayout_REG << 2);
+      layout->o_arg3   = OFFSET_arm_R3;
+      layout->osflags  |= (SyscallArgLayout_REG << 3);
+      layout->o_arg4   = OFFSET_arm_R4;
+      layout->osflags  |= (SyscallArgLayout_REG << 4);
+      layout->o_arg5   = OFFSET_arm_R5;
+      layout->osflags  |= (SyscallArgLayout_REG << 5);
+      layout->o_arg6   = OFFSET_arm_R6;
+      layout->osflags  |= (SyscallArgLayout_REG << 6);
+      layout->s_arg7   = sizeof(UWord) * 1;
+      layout->osflags  |= (SyscallArgLayout_STACK << 7);
+      layout->s_arg8   = sizeof(UWord) * 2;
+      layout->osflags  |= (SyscallArgLayout_STACK << 8);
+   }
+   else {
+      switch (VG_DARWIN_SYSNO_CLASS(sysno)) {
+         case VG_DARWIN_SYSCALL_CLASS_UNIX:
+            layout->osflags  = 0;
+            layout->o_sysno  = OFFSET_arm_R12;
+            layout->osflags  |= (SyscallArgLayout_REG << 0);
+            layout->o_arg1   = OFFSET_arm_R0;
+            layout->osflags  |= (SyscallArgLayout_REG << 1);
+            layout->o_arg2   = OFFSET_arm_R1;
+            layout->osflags  |= (SyscallArgLayout_REG << 2);
+            layout->o_arg3   = OFFSET_arm_R2;
+            layout->osflags  |= (SyscallArgLayout_REG << 3);
+            layout->o_arg4   = OFFSET_arm_R3;
+            layout->osflags  |= (SyscallArgLayout_REG << 4);
+            layout->o_arg5   = OFFSET_arm_R4;
+            layout->osflags  |= (SyscallArgLayout_REG << 5);
+            layout->o_arg6   = OFFSET_arm_R5;
+            layout->osflags  |= (SyscallArgLayout_REG << 6);
+            layout->s_arg7   = OFFSET_arm_R6;
+            layout->osflags  |= (SyscallArgLayout_REG << 7);
+            layout->s_arg8   = sizeof(UWord) * 1;
+            layout->osflags  |= (SyscallArgLayout_STACK << 8);
+            break;
+         case VG_DARWIN_SYSCALL_CLASS_MACH:
+            layout->osflags  = 0;
+            layout->o_sysno  = OFFSET_arm_R12;
+            layout->osflags  |= (SyscallArgLayout_REG << 0);
+            layout->o_arg1   = OFFSET_arm_R0;
+            layout->osflags  |= (SyscallArgLayout_REG << 1);
+            layout->o_arg2   = OFFSET_arm_R1;
+            layout->osflags  |= (SyscallArgLayout_REG << 2);
+            layout->o_arg3   = OFFSET_arm_R2;
+            layout->osflags  |= (SyscallArgLayout_REG << 3);
+            layout->o_arg4   = OFFSET_arm_R3;
+            layout->osflags  |= (SyscallArgLayout_REG << 4);
+            layout->o_arg5   = OFFSET_arm_R4;
+            layout->osflags  |= (SyscallArgLayout_REG << 5);
+            layout->o_arg6   = OFFSET_arm_R5;
+            layout->osflags  |= (SyscallArgLayout_REG << 6);
+            layout->s_arg7   = OFFSET_arm_R6;
+            layout->osflags  |= (SyscallArgLayout_REG << 7);
+            layout->s_arg8   = OFFSET_arm_R8;
+            layout->osflags  |= (SyscallArgLayout_REG << 8);
+            break;
+         case VG_DARWIN_SYSCALL_CLASS_MDEP:
+            layout->osflags  = 0;
+            layout->o_sysno  = OFFSET_arm_R3;
+            layout->osflags  |= (SyscallArgLayout_REG << 0);
+            layout->o_arg1   = OFFSET_arm_R0;
+            layout->osflags  |= (SyscallArgLayout_REG << 1);
+            layout->o_arg2   = OFFSET_arm_R1;
+            layout->osflags  |= (SyscallArgLayout_REG << 2);
+            layout->o_arg3   = OFFSET_arm_R2;
+            layout->osflags  |= (SyscallArgLayout_REG << 3);
+            layout->o_arg4   = -1;
+            layout->o_arg5   = -1;
+            layout->o_arg6   = -1;
+            layout->s_arg7   = -1;
+            layout->s_arg8   = -1;
+            break;
+         case VG_DARWIN_SYSCALL_CLASS_ML:
+            layout->osflags  = 0;
+            layout->o_sysno  = OFFSET_arm_R12;
+            layout->osflags  |= (SyscallArgLayout_REG << 0);
+            layout->o_arg1   = -1;
+            layout->o_arg2   = -1;
+            layout->o_arg3   = -1;
+            layout->o_arg4   = -1;
+            layout->o_arg5   = -1;
+            layout->o_arg6   = -1;
+            layout->o_arg7   = -1;
+            layout->o_arg8   = -1;
+            break;
+         default: 
+            vg_assert(0);
+            break;
+      }
+   }
 
 #elif defined(VGP_s390x_linux)
    layout->o_sysno  = OFFSET_s390x_SYSNO;
@@ -1384,6 +1807,13 @@ static const SyscallTableEntry* get_syscall_entry ( Int syscallno )
           ML_(mdep_trap_table)[idx].before != NULL)
          sys = &ML_(mdep_trap_table)[idx];
          break;
+#if defined(VGA_arm)
+   case VG_DARWIN_SYSCALL_CLASS_ML:
+      if (idx >= 0 && idx < ML_(ml_trap_table_size) &&
+          ML_(ml_trap_table)[idx].before != NULL)
+         sys = &ML_(ml_trap_table)[idx];
+         break;
+#endif
    default: 
       vg_assert(0);
       break;
@@ -1458,6 +1888,7 @@ void VG_(client_syscall) ( ThreadId tid, UInt trc )
    const SyscallTableEntry* ent;
    SyscallArgLayout         layout;
    SyscallInfo*             sci;
+   Bool                     indirect;
 
    ensure_initialised();
 
@@ -1562,7 +1993,12 @@ void VG_(client_syscall) ( ThreadId tid, UInt trc )
    sci = & syscallInfo[tid];
    vg_assert(sci->status.what == SsIdle);
 
+#if defined(VGO_darwin)
+   indirect = FALSE;
+   getSyscallArgsFromGuestState( &sci->orig_args, &tst->arch.vex, trc, &indirect );
+#else
    getSyscallArgsFromGuestState( &sci->orig_args, &tst->arch.vex, trc );
+#endif
 
    /* Copy .orig_args to .args.  The pre-handler may modify .args, but
       we want to keep the originals too, just in case. */
@@ -1611,7 +2047,11 @@ void VG_(client_syscall) ( ThreadId tid, UInt trc )
       action.  This info is needed so that the scalar syscall argument
       checks (PRE_REG_READ calls) know which bits of the guest state
       they need to inspect. */
+#if defined(VGO_darwin)
+   getSyscallArgLayout( &layout, indirect, sysno);
+#else
    getSyscallArgLayout( &layout );
+#endif
 
    /* Make sure the tmp signal mask matches the real signal mask;
       sigsuspend may change this. */
@@ -1626,8 +2066,8 @@ void VG_(client_syscall) ( ThreadId tid, UInt trc )
         sci->flags        is zero.
    */
 
-   PRINT("SYSCALL[%d,%d](%s) ",
-      VG_(getpid)(), tid, VG_SYSNUM_STRING(sysno));
+   PRINT("SYSCALL[%d,%d,0x%lx](%s) ",
+      VG_(getpid)(), tid, VG_(get_IP)(tid), VG_SYSNUM_STRING(sysno));
 
    /* Do any pre-syscall actions */
    if (VG_(needs).syscall_wrapper) {
@@ -2157,6 +2597,44 @@ void ML_(fixup_guest_state_to_restart_syscall) ( ThreadArchState* arch )
 #elif defined(VGP_amd64_darwin)
    // DDD: #warning GrP fixme amd64 restart unimplemented
    vg_assert(0);
+   
+#elif defined(VGP_arm_darwin)
+   arch->vex.guest_R15T = arch->vex.guest_IP_AT_SYSCALL;
+   if (arch->vex.guest_R15T & 1) {
+      // Thumb mode.  SVC is a encoded as
+      //   1101 1111 imm8
+      // where imm8 is the SVC number, and we only accept 0x80
+      UChar* p     = (UChar*)(arch->vex.guest_R15T - 1);
+      Bool   valid = ((p[0] == 0x80) && (p[1] == 0xDF));
+      if (!valid) {
+         VG_(message)(Vg_DebugMsg,
+                      "?! restarting over (Thumb) syscall that is not syscall "
+                      "at %#llx %02x %02x\n",
+                      arch->vex.guest_R15T - 1ULL, p[0], p[1]);
+      }
+      vg_assert(valid);
+      // FIXME: NOTE, this really isn't right.  We need to back up
+      // ITSTATE to what it was before the SVC instruction, but we
+      // don't know what it was.  At least assert that it is now
+      // zero, because if it is nonzero then it must also have
+      // been nonzero for the SVC itself, which means it was
+      // conditional.  Urk.
+      vg_assert(arch->vex.guest_ITSTATE == 0);
+   } else {
+      // ARM mode.  SVC is encoded as 
+      //   cond 1111 imm24
+      // where imm24 is the SVC number, and we only accept 0x80.
+      UChar* p     = (UChar*)arch->vex.guest_R15T;
+      Bool   valid = p[0] == 0x80 && p[1] == 0 && p[2] == 0
+                     && (p[3] & 0xF) == 0xF;
+      if (!valid) {
+         VG_(message)(Vg_DebugMsg,
+                      "?! restarting over (ARM) syscall that is not syscall "
+                      "at %#llx %02x %02x %02x %02x\n",
+                      arch->vex.guest_R15T + 0ULL, p[0], p[1], p[2], p[3]);
+      }
+      vg_assert(valid);
+   }
    
 #elif defined(VGP_s390x_linux)
    arch->vex.guest_IA -= 2;             // sizeof(syscall)

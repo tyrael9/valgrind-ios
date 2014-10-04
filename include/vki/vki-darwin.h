@@ -146,7 +146,11 @@ typedef uint32_t vki_u32;
 #define	VKI_S_ISVTX	S_ISVTX
 
 #define vki_stat stat
+#if __DARWIN_64_BIT_INO_T
+#define vki_stat64 stat
+#else
 #define vki_stat64 stat64
+#endif
 
 #define st_atime      st_atimespec.tv_sec
 #define st_atime_nsec st_atimespec.tv_nsec
@@ -352,12 +356,16 @@ typedef uint32_t vki_u32;
 #define VKI_PAGE_SIZE PAGE_SIZE
 #define VKI_PAGE_MASK PAGE_MASK
 
+#if defined(VGA_x86) || defined(VGA_amd64)
+#  include <sys/vmparam.h>
 
-#include <sys/vmparam.h>
-
-#define VKI_USRSTACK USRSTACK
-#define VKI_USRSTACK64 USRSTACK64
-
+#  define VKI_USRSTACK USRSTACK
+#  define VKI_USRSTACK64 USRSTACK64
+#elif defined(VGA_arm)
+#  define VKI_USRSTACK 0x27e00000
+#else
+#  error unknown platform
+#endif
 
 #include <mach/mach_time.h>
 
@@ -699,20 +707,27 @@ typedef
 #define vki_fsid fsid
 #define vki_fsid_t fsid_t
 #define vki_statfs statfs
+#if __DARWIN_64_BIT_INO_T
+#define vki_statfs64 statfs
+#else
 #define vki_statfs64 statfs64
+#endif
 
 
 #include <sys/select.h>
 
 #define vki_fd_set fd_set
 
-
+#if defined(VGA_x86) || defined(VGA_amd64)
 #include <sys/msgbuf.h>
 
 #define	VKI_MSG_BSIZE	MSG_BSIZE
 #define VKI_MSG_MAGIC	MSG_MAGIC
 #define vki_msgbuf msgbuf
-
+#elif defined(VGA_arm)
+#else
+#  error unknown platform
+#endif
 
 #include <sys/shm.h>
 
@@ -800,22 +815,42 @@ typedef
 #define vki_kevent kevent
 #define vki_kevent64 kevent64_s
 
+#if defined(VGA_x86) || defined(VGA_amd64)
 
 #include <sys/ev.h>
 
 typedef struct eventreq vki_eventreq;
+#elif defined(VGA_arm)
+typedef struct {
+  int      er_type;
+  int      er_handle;
+  void    *er_data;
+  int      er_rcnt;
+  int      er_wcnt;
+  int      er_ecnt;
+  int      er_eventbits;
+} vki_eventreq;
+#else
+#  error unknown platform
+#endif
 
 
 #include <sys/acl.h>
 
 #define vki_kauth_filesec kauth_filesec
 
-
+#if defined(VGA_x86) || defined(VGA_amd64)
 #include <sys/ptrace.h>
 
 #define VKI_PTRACE_TRACEME   PT_TRACE_ME
 #define VKI_PTRACE_DETACH    PT_DETACH
+#elif defined(VGA_arm)
 
+#define VKI_PTRACE_TRACEME   0
+#define VKI_PTRACE_DETACH    11
+#else
+#  error unknown platform
+#endif
 
 // sqlite/src/os_unix.c
 
@@ -994,11 +1029,19 @@ struct ByteRangeLockPB2
 #define	VKI_SIOCGIFASYNCMAP 	SIOCGIFASYNCMAP
 #define	VKI_SIOCSIFASYNCMAP 	SIOCSIGASYNCMAP
 
-
+#if defined(VGA_x86) || defined(VGA_amd64)
 #include <sys/dtrace.h>
 
 #define VKI_DTRACEHIOC_REMOVE   DTRACEHIOC_REMOVE
 #define VKI_DTRACEHIOC_ADDDOF   DTRACEHIOC_ADDDOF
+#elif defined(VGA_arm)
+
+#define VKI_DTRACEHIOC_REMOVE   _IO('h', 2)			/* remove helper */
+#define VKI_DTRACEHIOC_ADDDOF   _IOW('h', 4, user_addr_t)	/* add helper DOF */
+#else
+#  error unknown platform
+#endif
+
 
 
 #include <sys/ucontext.h>
@@ -1062,6 +1105,11 @@ struct ByteRangeLockPB2
 #include <netinet/in.h>
 
 #define VKI_IPPROTO_TCP  IPPROTO_TCP
+
+
+#include <mach/message.h>
+
+#define vki_audit_token_t audit_token_t
 
 
 // XXX: for some reason when I #include <sys/kernel_types.h> I get a syntax

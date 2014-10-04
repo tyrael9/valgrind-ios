@@ -347,6 +347,7 @@ COREGRIND_SOURCES_COMMON = \
 	m_dispatch/dispatch-tilegx-linux.S \
 	m_dispatch/dispatch-x86-darwin.S \
 	m_dispatch/dispatch-amd64-darwin.S \
+    m_dispatch/dispatch-arm-darwin.S \
 	m_gdbserver/inferiors.c \
 	m_gdbserver/m_gdbserver.c \
 	m_gdbserver/regcache.c \
@@ -373,6 +374,7 @@ COREGRIND_SOURCES_COMMON = \
 	m_mach/mach_msg.c \
 	m_mach/mach_traps-x86-darwin.S \
 	m_mach/mach_traps-amd64-darwin.S \
+    m_mach/mach_traps-arm-darwin.S \
 	m_replacemalloc/replacemalloc_core.c \
 	m_scheduler/scheduler.c \
 	m_scheduler/sema.c \
@@ -391,6 +393,7 @@ COREGRIND_SOURCES_COMMON = \
 	m_sigframe/sigframe-tilegx-linux.c \
 	m_sigframe/sigframe-x86-darwin.c \
 	m_sigframe/sigframe-amd64-darwin.c \
+    m_sigframe/sigframe-arm-darwin.c \
 	m_syswrap/syscall-x86-linux.S \
 	m_syswrap/syscall-amd64-linux.S \
 	m_syswrap/syscall-ppc32-linux.S \
@@ -404,6 +407,7 @@ COREGRIND_SOURCES_COMMON = \
 	m_syswrap/syscall-tilegx-linux.S \
 	m_syswrap/syscall-x86-darwin.S \
 	m_syswrap/syscall-amd64-darwin.S \
+    m_syswrap/syscall-arm-darwin.S \
 	m_syswrap/syswrap-main.c \
 	m_syswrap/syswrap-generic.c \
 	m_syswrap/syswrap-linux.c \
@@ -421,6 +425,7 @@ COREGRIND_SOURCES_COMMON = \
 	m_syswrap/syswrap-tilegx-linux.c \
 	m_syswrap/syswrap-x86-darwin.c \
 	m_syswrap/syswrap-amd64-darwin.c \
+    m_syswrap/syswrap-arm-darwin.c \
 	m_syswrap/syswrap-xen.c \
 	m_ume/elf.c \
 	m_ume/macho.c \

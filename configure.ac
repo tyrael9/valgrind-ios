@@ -320,6 +320,11 @@ AC_SUBST(VGCONF_OS)
 
 DEFAULT_SUPP=""
 
+AC_ARG_WITH(darwinver,
+   [  --with-darwinver=VER      Specify Darwin version for cross-compile],
+   darwinver="$withval",
+   darwinver="no")
+
 case "${host_os}" in
      *linux*)
 	AC_MSG_RESULT([ok (${host_os})])
@@ -346,80 +351,113 @@ case "${host_os}" in
      *darwin*)
         AC_MSG_RESULT([ok (${host_os})])
         VGCONF_OS="darwin"
-        AC_DEFINE([DARWIN_10_5], 100500, [DARWIN_VERS value for Mac OS X 10.5])
-        AC_DEFINE([DARWIN_10_6], 100600, [DARWIN_VERS value for Mac OS X 10.6])
-        AC_DEFINE([DARWIN_10_7], 100700, [DARWIN_VERS value for Mac OS X 10.7])
-        AC_DEFINE([DARWIN_10_8], 100800, [DARWIN_VERS value for Mac OS X 10.8])
-        AC_DEFINE([DARWIN_10_9], 100900, [DARWIN_VERS value for Mac OS X 10.9])
-        AC_DEFINE([DARWIN_10_10], 101000, [DARWIN_VERS value for Mac OS X 10.10])
+        AC_DEFINE([DARWIN_10_5], 9, [DARWIN_VERS value for Mac OS X 10.5])
+        AC_DEFINE([DARWIN_10_6], 10, [DARWIN_VERS value for Mac OS X 10.6])
+        AC_DEFINE([DARWIN_10_7], 11, [DARWIN_VERS value for Mac OS X 10.7])
+        AC_DEFINE([DARWIN_10_8], 12, [DARWIN_VERS value for Mac OS X 10.8])
+        AC_DEFINE([DARWIN_10_9], 13, [DARWIN_VERS value for Mac OS X 10.9])
+        AC_DEFINE([DARWIN_10_10], 14, [DARWIN_VERS value for Mac OS X 10.10])
+		AC_DEFINE([DARWIN_IOS_7], 14, [DARWIN_VERS value for iOS 7])
 
-	AC_MSG_CHECKING([for the kernel version])
-	kernel=`uname -r`
-
-        # Nb: for Darwin we set DEFAULT_SUPP here.  That's because Darwin
-        # has only one relevant version, the OS version. The `uname` check
-        # is a good way to get that version (i.e. "Darwin 9.6.0" is Mac OS
-        # X 10.5.6, and "Darwin 10.x" is Mac OS X 10.6.x Snow Leopard,
-        # and possibly "Darwin 11.x" is Mac OS X 10.7.x Lion), 
-        # and we don't know of an macros similar to __GLIBC__ to get that info.
-        #
-        # XXX: `uname -r` won't do the right thing for cross-compiles, but
-        # that's not a problem yet.
-        #
-        # jseward 21 Sept 2011: I seriously doubt whether V 3.7.0 will work
-        # on OS X 10.5.x; I haven't tested yet, and only plan to test 3.7.0
-        # on 10.6.8 and 10.7.1.  Although tempted to delete the configure
-        # time support for 10.5 (the 9.* pattern just below), I'll leave it
-        # in for now, just in case anybody wants to give it a try.  But I'm
-        # assuming that 3.7.0 is a Snow Leopard and Lion-only release.
-	case "${kernel}" in
-	     9.*)
-		  AC_MSG_RESULT([Darwin 9.x (${kernel}) / Mac OS X 10.5 Leopard])
-		  AC_DEFINE([DARWIN_VERS], DARWIN_10_5, [Darwin / Mac OS X version])
-		  DEFAULT_SUPP="darwin9.supp ${DEFAULT_SUPP}"
-		  DEFAULT_SUPP="darwin9-drd.supp ${DEFAULT_SUPP}"
-		  ;;
-	     10.*)
-		  AC_MSG_RESULT([Darwin 10.x (${kernel}) / Mac OS X 10.6 Snow Leopard])
-		  AC_DEFINE([DARWIN_VERS], DARWIN_10_6, [Darwin / Mac OS X version])
-		  DEFAULT_SUPP="darwin10.supp ${DEFAULT_SUPP}"
-		  DEFAULT_SUPP="darwin10-drd.supp ${DEFAULT_SUPP}"
-		  ;;
-	     11.*)
-		  AC_MSG_RESULT([Darwin 11.x (${kernel}) / Mac OS X 10.7 Lion])
-		  AC_DEFINE([DARWIN_VERS], DARWIN_10_7, [Darwin / Mac OS X version])
-		  DEFAULT_SUPP="darwin11.supp ${DEFAULT_SUPP}"
-		  DEFAULT_SUPP="darwin10-drd.supp ${DEFAULT_SUPP}"
-		  ;;
-	     12.*)
-		  AC_MSG_RESULT([Darwin 12.x (${kernel}) / Mac OS X 10.8 Mountain Lion])
-		  AC_DEFINE([DARWIN_VERS], DARWIN_10_8, [Darwin / Mac OS X version])
-		  DEFAULT_SUPP="darwin12.supp ${DEFAULT_SUPP}"
-		  DEFAULT_SUPP="darwin10-drd.supp ${DEFAULT_SUPP}"
-		  ;;
-	     13.*)
-		  AC_MSG_RESULT([Darwin 13.x (${kernel}) / Mac OS X 10.9 Mavericks])
-		  AC_DEFINE([DARWIN_VERS], DARWIN_10_9, [Darwin / Mac OS X version])
-		  DEFAULT_SUPP="darwin13.supp ${DEFAULT_SUPP}"
-		  DEFAULT_SUPP="darwin10-drd.supp ${DEFAULT_SUPP}"
-		  ;;
-	     14.*)
-		  AC_MSG_RESULT([Darwin 14.x (${kernel}) / Mac OS X 10.10 Yosemite])
-		  AC_DEFINE([DARWIN_VERS], DARWIN_10_10, [Darwin / Mac OS X version])
-		  DEFAULT_SUPP="darwin14.supp ${DEFAULT_SUPP}"
-		  DEFAULT_SUPP="darwin10-drd.supp ${DEFAULT_SUPP}"
-		  ;;
-             *) 
-		  AC_MSG_RESULT([unsupported (${kernel})])
-		  AC_MSG_ERROR([Valgrind works on Darwin 10.x, 11.x, 12.x, 13.x and 14.x (Mac OS X 10.6/7/8/9/10)])
-		  ;;
-	esac
-        ;;
-
+		# Check for cross-compile
+		# If it's not cross-compiling, use "uname -r" to detect kernel version
+		# is OK. Otherwise get the kernel version from user input.
+		if [[ "${host_cpu}" == "${build_cpu}" ]]
+		then
+			AC_MSG_CHECKING([for the kernel version])
+			kernel=`uname -r`
+		else
+			if [[ "${darwinver}" == no ]]
+			then
+				AC_MSG_RESULT([unrecognized darwin version (${darwinver})])
+				AC_MSG_ERROR([Please specify a valid darwin version using --with-darwinver option for cross compile])
+			else
+				kernel=$darwinver
+			fi
+		fi
+        
+		if [[[ "${host_cpu}" == i?86 ]]] || [[[ "${host_cpu}" == x86_64 ]]]
+		then
+		    # Nb: for Darwin we set DEFAULT_SUPP here.  That's because Darwin
+		    # has only one relevant version, the OS version. The `uname` check
+		    # is a good way to get that version (i.e. "Darwin 9.6.0" is Mac OS
+		    # X 10.5.6, and "Darwin 10.x" is Mac OS X 10.6.x Snow Leopard,
+		    # and possibly "Darwin 11.x" is Mac OS X 10.7.x Lion), 
+		    # and we don't know of an macros similar to __GLIBC__ to get that info.
+		    #
+		    # XXX: `uname -r` won't do the right thing for cross-compiles, but
+		    # that's not a problem yet.
+		    #
+		    # jseward 21 Sept 2011: I seriously doubt whether V 3.7.0 will work
+		    # on OS X 10.5.x; I haven't tested yet, and only plan to test 3.7.0
+		    # on 10.6.8 and 10.7.1.  Although tempted to delete the configure
+		    # time support for 10.5 (the 9.* pattern just below), I'll leave it
+		    # in for now, just in case anybody wants to give it a try.  But I'm
+		    # assuming that 3.7.0 is a Snow Leopard and Lion-only release.
+			case "${kernel}" in
+			     9.*)
+				  AC_MSG_RESULT([Darwin 9.x (${kernel}) / Mac OS X 10.5 Leopard])
+				  AC_DEFINE([DARWIN_VERS], DARWIN_10_5, [Darwin / Mac OS X version])
+				  DEFAULT_SUPP="darwin9.supp ${DEFAULT_SUPP}"
+				  DEFAULT_SUPP="darwin9-drd.supp ${DEFAULT_SUPP}"
+				  ;;
+			     10.*)
+				  AC_MSG_RESULT([Darwin 10.x (${kernel}) / Mac OS X 10.6 Snow Leopard])
+				  AC_DEFINE([DARWIN_VERS], DARWIN_10_6, [Darwin / Mac OS X version])
+				  DEFAULT_SUPP="darwin10.supp ${DEFAULT_SUPP}"
+				  DEFAULT_SUPP="darwin10-drd.supp ${DEFAULT_SUPP}"
+				  ;;
+			     11.*)
+				  AC_MSG_RESULT([Darwin 11.x (${kernel}) / Mac OS X 10.7 Lion])
+				  AC_DEFINE([DARWIN_VERS], DARWIN_10_7, [Darwin / Mac OS X version])
+				  DEFAULT_SUPP="darwin11.supp ${DEFAULT_SUPP}"
+				  DEFAULT_SUPP="darwin10-drd.supp ${DEFAULT_SUPP}"
+				  ;;
+			     12.*)
+				  AC_MSG_RESULT([Darwin 12.x (${kernel}) / Mac OS X 10.8 Mountain Lion])
+				  AC_DEFINE([DARWIN_VERS], DARWIN_10_8, [Darwin / Mac OS X version])
+				  DEFAULT_SUPP="darwin12.supp ${DEFAULT_SUPP}"
+				  DEFAULT_SUPP="darwin10-drd.supp ${DEFAULT_SUPP}"
+				  ;;
+			     13.*)
+				  AC_MSG_RESULT([Darwin 13.x (${kernel}) / Mac OS X 10.9 Mavericks])
+				  AC_DEFINE([DARWIN_VERS], DARWIN_10_9, [Darwin / Mac OS X version])
+				  DEFAULT_SUPP="darwin13.supp ${DEFAULT_SUPP}"
+				  DEFAULT_SUPP="darwin10-drd.supp ${DEFAULT_SUPP}"
+				  ;;
+				 14.*)
+				  AC_MSG_RESULT([Darwin 14.x (${kernel}) / Mac OS X 10.10 Yosemite])
+				  AC_DEFINE([DARWIN_VERS], DARWIN_10_10, [Darwin / Mac OS X version])
+				  DEFAULT_SUPP="darwin14.supp ${DEFAULT_SUPP}"
+				  DEFAULT_SUPP="darwin10-drd.supp ${DEFAULT_SUPP}"
+				  ;;
+		         *) 
+				  AC_MSG_RESULT([unsupported (${kernel})])
+				  AC_MSG_ERROR([Valgrind works on Darwin 10.x, 11.x, 12.x and 13.x (Mac OS X 10.6/7/8/9)])
+				  ;;
+			esac
+		elif [[[ "${host_cpu}" == armv7* ]]]
+		then
+			case "${kernel}" in
+				14.*)
+				  AC_MSG_RESULT([Darwin 14.x (${kernel}) / iOS 7])
+				  AC_DEFINE([DARWIN_VERS], DARWIN_IOS_7, [Darwin / iOS version])
+				  ;;
+				*)
+				  AC_MSG_RESULT([unsupported (${kernel})])
+				  AC_MSG_ERROR([Valgrind works on Darwin 14.x (iOS 7) on ARM])
+				  ;;
+			esac
+		else
+			AC_MSG_RESULT([unsupported (${kernel})])
+			AC_MSG_ERROR([Valgrind does not support Darwin on ${host_cpu} architecture])
+		fi
+    	;;
+	
      *) 
-	AC_MSG_RESULT([no (${host_os})])
-	AC_MSG_ERROR([Valgrind is operating system specific. Sorry.])
-	;;
+		AC_MSG_RESULT([no (${host_os})])
+		AC_MSG_ERROR([Valgrind is operating system specific. Sorry.])
+		;;
 esac
 
 #----------------------------------------------------------------------------
@@ -624,6 +662,16 @@ case "$ARCH_MAX-$VGCONF_OS" in
 	fi
         AC_MSG_RESULT([ok (${ARCH_MAX}-${VGCONF_OS})])
 	;;
+	 arm-darwin)
+		VGCONF_ARCH_PRI="arm"
+		VGCONF_PLATFORM_PRI_CAPS="ARM_DARWIN"
+		VGCONF_PLATFORM_SEC_CAPS=""
+		valt_load_address_pri_norml="0x14000000"
+		valt_load_address_pri_inner="0x8000000"
+	        valt_load_address_sec_norml="0xUNSET"
+	        valt_load_address_sec_inner="0xUNSET"
+		AC_MSG_RESULT([ok (${host_cpu}-${host_os})])
+	;;
      arm-linux) 
 	VGCONF_ARCH_PRI="arm"
 	VGCONF_PLATFORM_PRI_CAPS="ARM_LINUX"
@@ -741,7 +789,8 @@ AM_CONDITIONAL(VGCONF_ARCHS_INCLUDE_PPC64,
                  -o x$VGCONF_PLATFORM_PRI_CAPS = xPPC64LE_LINUX )
 AM_CONDITIONAL(VGCONF_ARCHS_INCLUDE_ARM,   
                test x$VGCONF_PLATFORM_PRI_CAPS = xARM_LINUX \
-                 -o x$VGCONF_PLATFORM_SEC_CAPS = xARM_LINUX )
+                 -o x$VGCONF_PLATFORM_SEC_CAPS = xARM_LINUX \
+				 -o x$VGCONF_PLATFORM_PRI_CAPS = xARM_DARWIN )
 AM_CONDITIONAL(VGCONF_ARCHS_INCLUDE_ARM64, 
                test x$VGCONF_PLATFORM_PRI_CAPS = xARM64_LINUX )
 AM_CONDITIONAL(VGCONF_ARCHS_INCLUDE_S390X,
@@ -786,7 +835,8 @@ AM_CONDITIONAL(VGCONF_PLATFORMS_INCLUDE_X86_DARWIN,
                  -o x$VGCONF_PLATFORM_SEC_CAPS = xX86_DARWIN)
 AM_CONDITIONAL(VGCONF_PLATFORMS_INCLUDE_AMD64_DARWIN, 
                test x$VGCONF_PLATFORM_PRI_CAPS = xAMD64_DARWIN)
-
+AM_CONDITIONAL(VGCONF_PLATFORMS_INCLUDE_ARM_DARWIN, 
+               test x$VGCONF_PLATFORM_PRI_CAPS = xARM_DARWIN)
 
 # Similarly, set up VGCONF_OS_IS_<os>.  Exactly one of these becomes defined.
 # Relies on the assumption that the primary and secondary targets are 
@@ -805,7 +855,8 @@ AM_CONDITIONAL(VGCONF_OS_IS_LINUX,
                  -o x$VGCONF_PLATFORM_PRI_CAPS = xTILEGX_LINUX)
 AM_CONDITIONAL(VGCONF_OS_IS_DARWIN,
                test x$VGCONF_PLATFORM_PRI_CAPS = xX86_DARWIN \
-                 -o x$VGCONF_PLATFORM_PRI_CAPS = xAMD64_DARWIN)
+                 -o x$VGCONF_PLATFORM_PRI_CAPS = xAMD64_DARWIN \
+				 -o x$VGCONF_PLATFORM_PRI_CAPS = xARM_DARWIN)
 
 
 # Sometimes, in the Makefile.am files, it's useful to know whether or not
@@ -2549,6 +2600,8 @@ elif test x$VGCONF_PLATFORM_PRI_CAPS = xX86_DARWIN ; then
   mflag_primary="$FLAG_M32 -arch i386"
 elif test x$VGCONF_PLATFORM_PRI_CAPS = xAMD64_DARWIN ; then
   mflag_primary="$FLAG_M64 -arch x86_64"
+elif test x$VGCONF_PLATFORM_PRI_CAPS = xARM_DARWIN ; then
+  mflag_primary="$FLAG_M32 -arch armv7"
 fi
 
 mflag_secondary=
@@ -2974,6 +3027,11 @@ AM_CONDITIONAL([HAVE_SHARED_POINTER_ANNOTATION],
 # Ok.  We're done checking.
 #----------------------------------------------------------------------------
 
+if test x$VGCONF_PLATFORM_PRI_CAPS = xARM_DARWIN ; then
+  CPPFLAGS=$(echo $CPPFLAGS | sed -e 's/-arch armv7//g')
+  LDFLAGS=$(echo $LDFLAGS | sed -e 's/-arch armv7//g')
+fi
+
 # Nb: VEX/Makefile is generated from Makefile.vex.in.
 AC_CONFIG_FILES([
    Makefile 
@@ -2981,48 +3039,10 @@ AC_CONFIG_FILES([
    valgrind.spec
    valgrind.pc
    glibc-2.X.supp
-   docs/Makefile 
-   tests/Makefile 
-   tests/vg_regtest 
-   perf/Makefile 
-   perf/vg_perf
-   gdbserver_tests/Makefile
    include/Makefile 
-   auxprogs/Makefile
-   mpi/Makefile
    coregrind/Makefile 
-   memcheck/Makefile
-   memcheck/tests/Makefile
-   memcheck/tests/common/Makefile
-   memcheck/tests/amd64/Makefile
-   memcheck/tests/x86/Makefile
-   memcheck/tests/linux/Makefile
-   memcheck/tests/darwin/Makefile
-   memcheck/tests/amd64-linux/Makefile
-   memcheck/tests/x86-linux/Makefile
-   memcheck/tests/ppc32/Makefile
-   memcheck/tests/ppc64/Makefile
-   memcheck/tests/s390x/Makefile
-   memcheck/tests/vbit-test/Makefile
-   cachegrind/Makefile
-   cachegrind/tests/Makefile
-   cachegrind/tests/x86/Makefile
-   cachegrind/cg_annotate
-   cachegrind/cg_diff
-   callgrind/Makefile
-   callgrind/callgrind_annotate
-   callgrind/callgrind_control
-   callgrind/tests/Makefile
-   helgrind/Makefile
-   helgrind/tests/Makefile
-   massif/Makefile
-   massif/tests/Makefile
-   massif/ms_print
-   lackey/Makefile
-   lackey/tests/Makefile
    none/Makefile
    none/tests/Makefile
-   none/tests/scripts/Makefile
    none/tests/amd64/Makefile
    none/tests/ppc32/Makefile
    none/tests/ppc64/Makefile
@@ -3032,28 +3052,9 @@ AC_CONFIG_FILES([
    none/tests/s390x/Makefile
    none/tests/mips32/Makefile
    none/tests/mips64/Makefile
-   none/tests/tilegx/Makefile
    none/tests/linux/Makefile
    none/tests/darwin/Makefile
-   none/tests/amd64-linux/Makefile
    none/tests/x86-linux/Makefile
-   none/tests/amd64-darwin/Makefile
-   none/tests/x86-darwin/Makefile
-   exp-sgcheck/Makefile
-   exp-sgcheck/tests/Makefile
-   drd/Makefile
-   drd/scripts/download-and-build-splash2
-   drd/tests/Makefile
-   exp-bbv/Makefile
-   exp-bbv/tests/Makefile
-   exp-bbv/tests/x86/Makefile
-   exp-bbv/tests/x86-linux/Makefile
-   exp-bbv/tests/amd64-linux/Makefile
-   exp-bbv/tests/ppc32-linux/Makefile
-   exp-bbv/tests/arm-linux/Makefile
-   exp-dhat/Makefile
-   exp-dhat/tests/Makefile
-   shared/Makefile
 ])
 AC_CONFIG_FILES([coregrind/link_tool_exe_linux],
                 [chmod +x coregrind/link_tool_exe_linux])

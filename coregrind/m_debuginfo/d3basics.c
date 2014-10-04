@@ -410,7 +410,7 @@ static Bool get_Dwarf_Reg( /*OUT*/Addr* a, Word regno, const RegSummary* regs )
    if (regno == 1/*SP*/) { *a = regs->sp; return True; }
 #  elif defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux)
    if (regno == 1/*SP*/) { *a = regs->sp; return True; }
-#  elif defined(VGP_arm_linux)
+#  elif defined(VGP_arm_linux) || defined(VGP_arm_darwin)
    if (regno == 13) { *a = regs->sp; return True; }
    if (regno == 11) { *a = regs->fp; return True; } 
 #  elif defined(VGP_s390x_linux)

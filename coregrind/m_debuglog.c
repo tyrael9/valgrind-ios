@@ -391,6 +391,43 @@ static UInt local_sys_getpid ( void )
    return __res;
 }
 
+#elif defined(VGP_arm_darwin)
+
+static UInt local_sys_write_stderr ( const HChar* buf, Int n )
+{
+   volatile Int block[2];
+   block[0] = (Int)buf;
+   block[1] = n;
+   __asm__ volatile (
+      "mov  r0, #2\n\t"        /* stderr */
+      "ldr  r1, [%0]\n\t"      /* buf */
+      "ldr  r2, [%0, #4]\n\t"  /* n */
+      "mov  r12, #"VG_STRINGIFY(VG_DARWIN_SYSNO_FOR_KERNEL_UNIX(__NR_write_nocancel))"\n\t"
+      "svc  0x80\n"          /* write() */
+      "bcc  1f\n"
+      "mov  r0, #-1\n"
+      "1: "
+      "str  r0, [%0]\n\t"
+      :
+      : "r" (block)
+      : "r0","r1","r2","r12","cc"
+   );
+   return (UInt)block[0];
+}
+
+static UInt local_sys_getpid ( void )
+{
+   UInt __res;
+   __asm__ volatile (
+      "mov  r12, #"VG_STRINGIFY(VG_DARWIN_SYSNO_FOR_KERNEL_UNIX(__NR_getpid))"\n"
+      "svc  0x80\n"      /* getpid() */
+      "mov  %0, r0\n"
+      : "=r" (__res)
+      :
+      : "r0", "r12", "cc" );
+   return __res;
+}
+
 #elif defined(VGP_s390x_linux)
 
 static UInt local_sys_write_stderr ( const HChar* buf, Int n )

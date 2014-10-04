@@ -44,7 +44,9 @@
 #include <sys/mman.h>
 #include <sys/param.h>
 #include <sys/stat.h>
+#if !defined(VGA_arm)
 #include <sys/user.h>
+#endif
 #include <unistd.h>
 #include <mach-o/fat.h>
 #include <mach-o/loader.h>
@@ -254,8 +256,8 @@ int main(int argc, char** argv, char** envp)
       VG_(debugLog)(1, "launcher", "tool '%s' requested\n", toolname);
    } else {
       VG_(debugLog)(1, "launcher", 
-                       "no tool requested, defaulting to 'memcheck'\n");
-      toolname = "memcheck";
+                       "no tool requested, defaulting to 'none'\n");
+      toolname = "none";
    }
 
    /* Find the real executable if clientname is an app bundle. */
@@ -268,7 +270,13 @@ int main(int argc, char** argv, char** envp)
          if (dot) {
             char *newclient;
             *dot = '\0';
+#if defined(VGA_arm)
+            asprintf(&newclient, "%s/%s", clientname, appname);
+#elif defined(VGA_x86) || defined(VGA_amd64)
             asprintf(&newclient, "%s/Contents/MacOS/%s", clientname, appname);
+#else
+#error Unknown Platform
+#endif
             VG_(debugLog)(1, "launcher", "Using executable in app bundle: %s\n", newclient);
             clientname = newclient;
             argv[clientname_arg] = newclient;

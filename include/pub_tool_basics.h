@@ -167,6 +167,9 @@ typedef
       SysRes_MDEP,     // MDEP, result is _wLO
       SysRes_UNIX_OK,  // UNIX, success, result is _wHI:_wLO
       SysRes_UNIX_ERR  // UNIX, error,   error  is _wHI:_wLO
+#if defined(VGA_arm)
+      ,SysRes_ML       // ML, result is _wHI:_wLO
+#endif
    }
    SysResMode;
 typedef
@@ -222,6 +225,9 @@ static inline Bool sr_isError ( SysRes sr ) {
 
 static inline UWord sr_Res ( SysRes sr ) {
    switch (sr._mode) {
+#if defined(VGA_arm)
+      case SysRes_ML:
+#endif
       case SysRes_MACH:
       case SysRes_MDEP:
       case SysRes_UNIX_OK:
@@ -235,6 +241,9 @@ static inline UWord sr_Res ( SysRes sr ) {
 
 static inline UWord sr_ResHI ( SysRes sr ) {
    switch (sr._mode) {
+#if defined(VGA_arm)
+      case SysRes_ML:
+#endif
       case SysRes_UNIX_OK:
          return sr._wHI;
       /* should assert, but we can't here */

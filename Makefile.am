@@ -3,6 +3,8 @@ AUTOMAKE_OPTIONS = foreign 1.10 dist-bzip2
 
 include $(top_srcdir)/Makefile.all.am 
 
+NULONLY = none
+
 TOOLS =		memcheck \
 		cachegrind \
 		callgrind \
@@ -23,16 +25,17 @@ SUBDIRS = \
 	VEX \
 	coregrind \
 	. \
-	$(TOOLS) \
-	$(EXP_TOOLS) \
-	shared \
-	tests \
-	perf \
-	gdbserver_tests \
-	memcheck/tests/vbit-test \
-	auxprogs \
-	mpi \
-	docs
+	$(NULONLY)
+#	$(TOOLS) \
+#	$(EXP_TOOLS) \
+#	shared \
+#	tests \
+#	perf \
+#	gdbserver_tests \
+#	memcheck/tests/vbit-test \
+#	auxprogs \
+#	mpi \
+#	docs
 DIST_SUBDIRS  = $(SUBDIRS)
 
 SUPP_FILES = \

@@ -222,6 +222,47 @@ SysRes VG_(mk_SysRes_x86_darwin) ( UChar scclass, Bool isErr,
    return res;
 }
 
+SysRes VG_(mk_SysRes_arm_darwin) ( UChar scclass, Bool isErr,
+                                   UInt wHI, UInt wLO )
+{
+   SysRes res;
+   res._wHI  = 0;
+   res._wLO  = 0;
+   res._mode = 0; /* invalid */
+   vg_assert(isErr == False || isErr == True);
+   vg_assert(sizeof(UWord) == sizeof(UInt));
+   switch (scclass) {
+      case VG_DARWIN_SYSCALL_CLASS_UNIX:
+         res._wLO  = wLO;
+         res._wHI  = wHI;
+         res._mode = isErr ? SysRes_UNIX_ERR : SysRes_UNIX_OK;
+         break;
+      case VG_DARWIN_SYSCALL_CLASS_MACH:
+         vg_assert(!isErr);
+         vg_assert(wHI == 0);
+         res._wLO  = wLO;
+         res._mode = SysRes_MACH;
+         break;
+      case VG_DARWIN_SYSCALL_CLASS_MDEP:
+         vg_assert(!isErr);
+         vg_assert(wHI == 0);
+         res._wLO  = wLO;
+         res._mode = SysRes_MDEP;
+         break;
+#if defined(VGA_arm)
+      case VG_DARWIN_SYSCALL_CLASS_ML:
+         vg_assert(!isErr);
+         res._wLO  = wLO;
+         res._wHI  = wHI;
+         res._mode = SysRes_ML;
+         break;
+#endif
+      default:
+         vg_assert(0);
+   }
+   return res;
+}
+
 SysRes VG_(mk_SysRes_amd64_darwin) ( UChar scclass, Bool isErr,
                                      ULong wHI, ULong wLO )
 {
@@ -676,6 +717,102 @@ asm(".private_extern _do_syscall_mach_WRK\n"
     "        retq                     \n"
     );
 
+#elif defined(VGP_arm_darwin)
+
+static ULong 
+do_syscall_unix_WRK ( UWord a1, UWord a2, UWord a3, /* r0-r2 */
+                      UWord a4, UWord a5, UWord a6, /* r3, 0x0(sp), 0x4(sp) */
+                      UWord a7, UWord a8, /* 0x8(sp), 0xc(sp) */
+                      UWord syscall_no, /* 0x10(esp) */
+                      /*OUT*/UInt* errflag /* 0x14(esp) */ );
+// Unix syscall: 64-bit return in r1:r0, with LSB in r0
+// error indicated by carry flag: clear=good, set=bad
+asm(
+    ".text                            \n"
+    ".align 4                         \n"
+    ".globl _do_syscall_unix_WRK\n"
+    "_do_syscall_unix_WRK:\n"
+    "        ldr     r12, [sp, #0x14] \n"  /* assume syscall success */
+    "        push    {r4}             \n"
+    "        mov     r4,  #0          \n"
+    "        str     r4,  [r12]       \n"
+    "        pop     {r4}             \n"
+       
+    "        mov     r12, sp          \n"
+    "        stmfd   sp!, {r4-r6, r8} \n"  /* sp -= 0x10 */
+    "        ldmia   r12, {r4-r6}     \n"
+    "        ldr     r12, [sp, #0x20] \n"
+    "        svc     #0x80            \n"
+    "        ldmfd   sp!, {r4-r6, r8} \n"  /* sp += 0x10 */
+    "        bcc     1f               \n"  /* jump if success */
+    
+    "        ldr     r12, [sp, #0x14] \n"  /* assume syscall success */
+    "        push    {r4}             \n"
+    "        mov     r4,  #1          \n"
+    "        str     r4,  [r12]       \n"
+    "        pop     {r4}             \n"
+          
+    "    1:  bx      lr               \n"
+    );
+
+static UInt 
+do_syscall_mach_WRK ( UWord a1, UWord a2, UWord a3, /* r0-r2 */
+                      UWord a4, UWord a5, UWord a6, /* r3, 0x0(sp), 0x4(sp) */
+                      UWord a7, UWord a8, /* 0x8(sp), 0xc(sp) */
+                      UWord syscall_no /* 0x10(esp) */ );
+// Mach trap: 32-bit result in r0 (or 64-bit result in r1:r0), no error flag
+asm(
+    ".text                            \n"
+    ".align 4                         \n"
+    ".globl _do_syscall_mach_WRK\n"
+    "_do_syscall_mach_WRK:\n"
+    "        mov     r12, sp          \n"
+    "        stmfd   sp!, {r4-r6, r8} \n"  /* sp -= 0x10 */
+    "        ldmia   r12, {r4-r6, r8} \n"
+    "        ldr     r12, [sp, #0x20] \n"
+    "        svc     #0x80            \n"
+    "        ldmfd   sp!, {r4-r6, r8} \n"  /* sp += 0x10 */
+    "        bx      lr               \n"
+    );
+
+static UInt 
+do_syscall_mdep_WRK ( UWord a1, UWord a2, UWord a3, /* r0-r2 */
+                      UWord a4, UWord a5, UWord a6, /* r3, 0x0(sp), 0x4(sp) */
+                      UWord a7, UWord a8, /* 0x8(sp), 0xc(sp) */
+                      UWord syscall_no /* 0x10(esp) */ );
+// mdep trap: 32-bit result in r0, no error flag
+asm(
+    ".text                            \n"
+    ".align 4                         \n"
+    ".globl _do_syscall_mdep_WRK\n"
+    "_do_syscall_mdep_WRK:\n"
+    "        ldr     r3, [sp, #0x10]  \n"
+    "        mov     r12, #0x80000000 \n"
+    "        svc     #0x80            \n"
+    "        bx      lr               \n"
+    );
+
+static ULong 
+do_syscall_ml_WRK ( UWord a1, UWord a2, UWord a3, /* r0-r2 */
+                      UWord a4, UWord a5, UWord a6, /* r3, 0x0(sp), 0x4(sp) */
+                      UWord a7, UWord a8, /* 0x8(sp), 0xc(sp) */
+                      UWord syscall_no /* 0x10(esp) */ );
+// ML trap: 64-bit return in r1:r0, with LSB in r0, no error flag
+asm(
+    ".text                            \n"
+    ".align 4                         \n"
+    ".globl _do_syscall_ml_WRK\n"
+    "_do_syscall_ml_WRK:\n"
+    "        mov     r12, sp          \n"
+    "        stmfd   sp!, {r4-r6, r8} \n"  /* sp -= 0x10 */
+    "        ldmia   r12, {r4-r6, r8} \n"
+    "        ldr     r12, [sp, #0x20] \n"
+    "        svc     #0x80            \n"
+    "        ldmfd   sp!, {r4-r6, r8} \n"  /* sp += 0x10 */
+    "        bx      lr               \n"
+    );
+
+
 #elif defined(VGP_s390x_linux)
 
 static UWord do_syscall_WRK (
@@ -874,7 +1011,41 @@ SysRes VG_(do_syscall) ( UWord sysno, UWord a1, UWord a2, UWord a3,
          break;
    }
    return VG_(mk_SysRes_amd64_darwin)( scclass, err ? True : False, wHI, wLO );
-  
+   
+#  elif defined(VGP_arm_darwin)
+   UInt  wLO = 0, wHI = 0, err = 0;
+   ULong u64;
+   UChar scclass = VG_DARWIN_SYSNO_CLASS(sysno);
+   switch (scclass) {
+      case VG_DARWIN_SYSCALL_CLASS_UNIX:
+         u64 = do_syscall_unix_WRK(a1,a2,a3,a4,a5,a6,a7,a8,
+                                   VG_DARWIN_SYSNO_FOR_KERNEL(sysno), &err);
+         wLO = (UInt)u64;
+         wHI = (UInt)(u64 >> 32);
+         break;
+      case VG_DARWIN_SYSCALL_CLASS_MACH:
+         wLO = do_syscall_mach_WRK(a1,a2,a3,a4,a5,a6,a7,a8, 
+                                   VG_DARWIN_SYSNO_FOR_KERNEL(sysno));
+         err = 0;
+         break;
+      case VG_DARWIN_SYSCALL_CLASS_MDEP:
+         wLO = do_syscall_mdep_WRK(a1,a2,a3,a4,a5,a6,a7,a8, 
+                                   VG_DARWIN_SYSNO_FOR_KERNEL(sysno));
+         err = 0;
+         break;
+      case VG_DARWIN_SYSCALL_CLASS_ML:
+         u64 = do_syscall_ml_WRK(a1,a2,a3,a4,a5,a6,a7,a8, 
+                                   VG_DARWIN_SYSNO_FOR_KERNEL(sysno));
+         wLO = (UInt)u64;
+         wHI = (UInt)(u64 >> 32);
+         err = 0;
+         break;
+      default:
+         vg_assert(0);
+         break;
+   }
+   return VG_(mk_SysRes_arm_darwin)( scclass, err ? True : False, wHI, wLO );  
+
 #elif defined(VGP_s390x_linux)
    UWord val;
 

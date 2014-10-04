@@ -1159,6 +1159,45 @@ VG_(trampoline_stuff_end):
         /* a trailing page of unexecutable code */
 .fill 2048, 2, 0x0b0f /* `ud2` */
 
+/*---------------- arm-darwin ----------------*/
+#else
+#if defined(VGP_arm_darwin)
+
+#       define UD2_4      .word 0xFFFFFFFF
+#	define UD2_16     UD2_4    ; UD2_4    ; UD2_4    ; UD2_4
+#	define UD2_64     UD2_16   ; UD2_16   ; UD2_16   ; UD2_16
+#	define UD2_256    UD2_64   ; UD2_64   ; UD2_64   ; UD2_64
+#	define UD2_1024   UD2_256  ; UD2_256  ; UD2_256  ; UD2_256
+#	define UD2_PAGE   UD2_1024 ; UD2_1024 ; UD2_1024 ; UD2_1024  
+
+	/* a leading page of unexecutable code */
+	UD2_PAGE
+
+.global VG_(trampoline_stuff_start)
+.align 4
+VG_(trampoline_stuff_start):
+
+.global VG_(arm_darwin_SUBST_FOR_sigreturn)
+.align 4
+VG_(arm_darwin_SUBST_FOR_sigreturn):
+	mov r12, # VG_DARWIN_SYSNO_FOR_KERNEL_UNIX(__NR_DARWIN_FAKE_SIGRETURN)
+    svc #0x80
+    .long 0xFFFFFFFF /*illegal insn*/
+
+.global VG_(trampoline_stuff_end)
+.align 4
+VG_(trampoline_stuff_end):
+
+	/* and a trailing page of unexecutable code */
+	UD2_PAGE
+
+#	undef UD2_4
+#	undef UD2_16
+#	undef UD2_64
+#	undef UD2_256
+#	undef UD2_1024
+#	undef UD2_PAGE
+
 
 /*---------------- s390x-linux ----------------*/
 #else

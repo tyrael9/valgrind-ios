@@ -2418,6 +2418,11 @@ Int valgrind_main ( Int argc, HChar **argv, HChar **envp )
                0xfffec000, 0xfffff000-0xfffec000,
                True, False, True, /* r-x */
                0 /* di_handle: no associated debug info */ );
+#    elif defined(VGA_arm_darwin)
+     VG_TRACK( new_mem_startup,
+               0xffff4000, 0xffff5000-0xffff4000,
+               True, False, True, /* r-x */
+               0 /* di_handle: no associated debug info */ );     
 #    endif
    }
 
@@ -3379,6 +3384,29 @@ asm("\n"
     "\tint $3\n"
     "\tint $3\n"
 );
+#elif defined(VGP_arm_darwin)
+asm("\n"
+    "\t.text\n"
+    "\t.global __start\n"
+    "\t.align 4\n"
+    "__start:\n"
+    "\tldr  r0, [pc, #36]\n"
+    "\tldr  r1, [pc, #36]\n"
+    "\tadd  r0, r1, r0\n"
+    "\tldr  r1, [pc, #32]\n"
+    "\tadd  r0, r1, r0\n"
+    "\tmvn  r1, #15\n"
+    "\tand  r0, r0, r1\n"
+    "\tmov  r1, sp\n"
+    "\tmov  sp, r0\n"
+    "\tmov  r0, r1\n"
+    "\tb __start_in_C_darwin\n"
+    "\t.word _vgPlain_interim_stack\n"
+    "\t.word "VG_STRINGIFY(VG_STACK_GUARD_SZB)"\n"
+    "\t.word "VG_STRINGIFY(VG_STACK_ACTIVE_SZB)"\n"
+);
+#else
+#error Unknown platform
 #endif
 
 void* __memcpy_chk(void *dest, const void *src, SizeT n, SizeT n2);
@@ -3449,7 +3477,7 @@ void _start_in_C_darwin ( UWord* pArgc )
      ___udivdi3
      ___umoddi3
 */
-#if defined(VGP_x86_darwin)
+#if defined(VGP_x86_darwin) || defined(VGP_arm_darwin)
 
 /* Routines for doing signed/unsigned 64 x 64 ==> 64 div and mod
    (udivdi3, umoddi3, divdi3, moddi3) using only 32 x 32 ==> 32
@@ -3812,7 +3840,9 @@ Long __moddi3 (Long u, Long v)
 
 /* seee eeee eeee mmmm mmmm mmmm mmmm mmmm | mmmm mmmm mmmm mmmm mmmm mmmm mmmm mmmm */
 
+typedef          long long di_int;
 typedef unsigned long long du_int;
+typedef      int si_int;
 typedef unsigned su_int;
 
 typedef union
@@ -3856,6 +3886,85 @@ __fixunsdfdi(double a)
     return r.all;
 }
 
+#if defined(VGA_arm)
+
+su_int
+__udivsi3(su_int n, su_int d)
+{
+    const unsigned n_uword_bits = sizeof(su_int) * CHAR_BIT;
+    su_int q;
+    su_int r;
+    unsigned sr;
+    /* special cases */
+    if (d == 0)
+        return 0; /* ?! */
+    if (n == 0)
+        return 0;
+    sr = nlz32(d) - nlz32(n);
+    /* 0 <= sr <= n_uword_bits - 1 or sr large */
+    if (sr > n_uword_bits - 1)  /* d > r */
+        return 0;
+    if (sr == n_uword_bits - 1)  /* d == 1 */
+        return n;
+    ++sr;
+    /* 1 <= sr <= n_uword_bits - 1 */
+    /* Not a special case */
+    q = n << (n_uword_bits - sr);
+    r = n >> sr;
+    su_int carry = 0;
+    for (; sr > 0; --sr)
+    {
+        /* r:q = ((r:q)  << 1) | carry */
+        r = (r << 1) | (q >> (n_uword_bits - 1));
+        q = (q << 1) | carry;
+        /* carry = 0;
+         * if (r.all >= d.all)
+         * {
+         *      r.all -= d.all;
+         *      carry = 1;
+         * }
+         */
+        const si_int s = (si_int)(d - r - 1) >> (n_uword_bits - 1);
+        carry = s & 1;
+        r -= d & s;
+    }
+    q = (q << 1) | carry;
+    return q;
+}
+
+si_int
+__divsi3(si_int a, si_int b)
+{
+    const int bits_in_word_m1 = (int)(sizeof(si_int) * CHAR_BIT) - 1;
+    si_int s_a = a >> bits_in_word_m1;           /* s_a = a < 0 ? -1 : 0 */
+    si_int s_b = b >> bits_in_word_m1;           /* s_b = b < 0 ? -1 : 0 */
+    a = (a ^ s_a) - s_a;                         /* negate if s_a == -1 */
+    b = (b ^ s_b) - s_b;                         /* negate if s_b == -1 */
+    s_a ^= s_b;                                  /* sign of quotient */
+    return (__udivsi3(a, b) ^ s_a) - s_a;        /* negate if s_a == -1 */
+}
+
+si_int
+__modsi3(si_int a, si_int b)
+{
+    return a - __divsi3(a, b) * b;
+}
+
+su_int
+__udivmodsi4(su_int a, su_int b, su_int* rem)
+{
+  si_int d = __udivsi3(a,b);
+  *rem = a - (d*b);
+  return d;
+}
+
+su_int
+__umodsi3(su_int a, su_int b)
+{
+    return a - __udivsi3(a, b) * b;
+}
+
+#endif
 
 #endif
 

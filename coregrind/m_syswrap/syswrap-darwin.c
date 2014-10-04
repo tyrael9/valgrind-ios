@@ -65,7 +65,9 @@
 
 /* --- !!! --- EXTERNAL HEADERS start --- !!! --- */
 #include <mach/mach.h>
+#if !defined(VGA_arm)
 #include <mach/mach_vm.h>
+#endif
 #include <semaphore.h>
 /* --- !!! --- EXTERNAL HEADERS end --- !!! --- */
 
@@ -478,7 +480,7 @@ __private_extern__ void assign_port_name(mach_port_t port, const HChar *name)
 
 
 // Return the name of the given port or "UNKNOWN 0x1234" if not known.
-static const HChar *name_for_port(mach_port_t port)
+const HChar *name_for_port(mach_port_t port)
 {
    static HChar buf[8 + PORT_STRLEN + 1];
    OpenPort *i;
@@ -1071,7 +1073,7 @@ Bool ML_(sync_mappings)(const HChar* when, const HChar* where, UWord num)
 #if VG_WORDSIZE == 4
 // Combine two 32-bit values into a 64-bit value
 // Always use with low-numbered arg first (e.g. LOHI64(ARG1,ARG2) )
-# if defined(VGA_x86)
+# if defined(VGA_x86) || defined(VGA_arm)
 #  define LOHI64(lo,hi)   ( ((ULong)(UInt)(lo)) | (((ULong)(UInt)(hi)) << 32) )
 # else
 #  error unknown architecture
@@ -8928,7 +8930,7 @@ PRE(thread_fast_set_cthread_self)
    {
       ThreadState *tst = VG_(get_ThreadState)(tid);
       tst->os_state.pthread = ARG1;
-      tst->arch.vex.guest_GS_CONST = ARG1;
+      tst->arch.vex.guest_GS_0x60 = ARG1;
       // SET_STATUS_Success(0x60);
       // see comments on x86 case just above
       SET_STATUS_from_SysRes(
@@ -9062,7 +9064,7 @@ POST(psynch_cvclrprepost)
 static void munge_wwl(UWord* a1, UWord* a2, ULong* a3,
                       UWord aRG1, UWord aRG2, UWord aRG3, UWord aRG4)
 {
-#  if defined(VGA_x86)
+#  if defined(VGA_x86) || defined(VGA_arm)
    *a1 = aRG1; *a2 = aRG2; *a3 = LOHI64(aRG3,aRG4);
 #  else
    *a1 = aRG1; *a2 = aRG2; *a3 = aRG3;
@@ -9073,7 +9075,7 @@ static void munge_wll(UWord* a1, ULong* a2, ULong* a3,
                       UWord aRG1, UWord aRG2, UWord aRG3,
                       UWord aRG4, UWord aRG5)
 {
-#  if defined(VGA_x86)
+#  if defined(VGA_x86) || defined(VGA_arm)
    *a1 = aRG1; *a2 = LOHI64(aRG2,aRG3); *a3 = LOHI64(aRG4,aRG5);
 #  else
    *a1 = aRG1; *a2 = aRG2; *a3 = aRG3;
@@ -9084,7 +9086,7 @@ static void munge_wwlw(UWord* a1, UWord* a2, ULong* a3, UWord* a4,
                        UWord aRG1, UWord aRG2, UWord aRG3,
                        UWord aRG4, UWord aRG5)
 {
-#  if defined(VGA_x86)
+#  if defined(VGA_x86) || defined(VGA_arm)
    *a1 = aRG1; *a2 = aRG2; *a3 = LOHI64(aRG3,aRG4); *a4 = aRG5;
 #  else
    *a1 = aRG1; *a2 = aRG2; *a3 = aRG3; *a4 = aRG4;
@@ -9095,7 +9097,7 @@ static void munge_wwwl(UWord* a1, UWord* a2, UWord* a3, ULong* a4,
                        UWord aRG1, UWord aRG2, UWord aRG3,
                        UWord aRG4, UWord aRG5)
 {
-#  if defined(VGA_x86)
+#  if defined(VGA_x86) || defined(VGA_arm)
    *a1 = aRG1; *a2 = aRG2; *a3 = aRG3; *a4 = LOHI64(aRG4,aRG5);
 #  else
    *a1 = aRG1; *a2 = aRG2; *a3 = aRG3; *a4 = aRG4;
@@ -9106,7 +9108,7 @@ static void munge_wllww(UWord* a1, ULong* a2, ULong* a3, UWord* a4, UWord* a5,
                         UWord aRG1, UWord aRG2, UWord aRG3,
                         UWord aRG4, UWord aRG5, UWord aRG6, UWord aRG7)
 {
-#  if defined(VGA_x86)
+#  if defined(VGA_x86) || defined(VGA_arm)
    *a1 = aRG1; *a2 = LOHI64(aRG2,aRG3); *a3 = LOHI64(aRG4,aRG5);
    *a4 = aRG6; *a5 = aRG7;
 #  else
@@ -9119,7 +9121,7 @@ static void munge_wwllww(UWord* a1, UWord* a2, ULong* a3,
                          UWord aRG1, UWord aRG2, UWord aRG3, UWord aRG4,
                          UWord aRG5, UWord aRG6, UWord aRG7, UWord aRG8)
 {
-#  if defined(VGA_x86)
+#  if defined(VGA_x86) || defined(VGA_arm)
    *a1 = aRG1; *a2 = aRG2;
    *a3 = LOHI64(aRG3,aRG4); *a4 = LOHI64(aRG5,aRG6);
    *a5 = aRG7; *a6 = aRG8;
@@ -9522,18 +9524,92 @@ PRE(guarded_writev_np)
 
 #endif /* DARWIN_VERS >= DARWIN_10_10 */
 
+/* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   START: THE FOLLOWING CODE ARE FOR x86 AND amd64 ONLY
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
+
+#if defined(VGA_x86) || defined(VGA_amd64)
 
 /* ---------------------------------------------------------------------
-   syscall tables
+   machine-dependent traps: x86 and amd64
    ------------------------------------------------------------------ */
 
-/* Add a Darwin-specific, arch-independent wrapper to a syscall table. */
+#if defined(VGA_x86)
+static VexGuestX86SegDescr* alloc_zeroed_x86_LDT ( void )
+{
+   Int nbytes = VEX_GUEST_X86_LDT_NENT * sizeof(VexGuestX86SegDescr);
+   return VG_(arena_calloc)(VG_AR_CORE, "syswrap-darwin.ldt", nbytes, 1);
+}
+#endif
 
-#define MACX_(sysno, name) \
-           WRAPPER_ENTRY_X_(darwin, VG_DARWIN_SYSNO_INDEX(sysno), name) 
+PRE(thread_fast_set_cthread_self)
+{
+   PRINT("thread_fast_set_cthread_self ( %#lx )", ARG1);
+   PRE_REG_READ1(void, "thread_fast_set_cthread_self", struct pthread_t *, self);
 
-#define MACXY(sysno, name) \
-           WRAPPER_ENTRY_XY(darwin, VG_DARWIN_SYSNO_INDEX(sysno), name)
+#if defined(VGA_x86)
+   // Point the USER_CTHREAD ldt entry (slot 6, reg 0x37) at this pthread
+   {
+      VexGuestX86SegDescr *ldt;
+      ThreadState *tst = VG_(get_ThreadState)(tid);
+      ldt = (VexGuestX86SegDescr *)tst->arch.vex.guest_LDT;
+      if (!ldt) {
+         ldt = alloc_zeroed_x86_LDT();
+         tst->arch.vex.guest_LDT = (HWord)ldt;
+      }
+      VG_(memset)(&ldt[6], 0, sizeof(ldt[6]));
+      ldt[6].LdtEnt.Bits.LimitLow = 1;
+      ldt[6].LdtEnt.Bits.LimitHi = 0;
+      ldt[6].LdtEnt.Bits.BaseLow = ARG1 & 0xffff;
+      ldt[6].LdtEnt.Bits.BaseMid = (ARG1 >> 16) & 0xff;
+      ldt[6].LdtEnt.Bits.BaseHi = (ARG1 >> 24) & 0xff;
+      ldt[6].LdtEnt.Bits.Pres = 1; // ACC_P
+      ldt[6].LdtEnt.Bits.Dpl = 3; // ACC_PL_U
+      ldt[6].LdtEnt.Bits.Type = 0x12; // ACC_DATA_W
+      ldt[6].LdtEnt.Bits.Granularity = 1;  // SZ_G
+      ldt[6].LdtEnt.Bits.Default_Big = 1;  // SZ_32
+      
+      tst->os_state.pthread = ARG1;
+      tst->arch.vex.guest_GS = 0x37;
+
+      // What we would like to do is:
+      //   SET_STATUS_Success(0x37);
+      // but that doesn't work, because this is a MDEP-class syscall,
+      // and SET_STATUS_Success creates a UNIX-class syscall result.
+      // Hence we have to laboriously construct the full SysRes "by hand"
+      // and use that to set the syscall return status.
+      SET_STATUS_from_SysRes(
+         VG_(mk_SysRes_x86_darwin)(
+            VG_DARWIN_SYSNO_CLASS(__NR_thread_fast_set_cthread_self),
+            False, 0, 0x37
+         )
+      );
+   }
+
+#elif defined(VGA_amd64)
+   // GrP fixme bigger hack than x86
+   {
+      ThreadState *tst = VG_(get_ThreadState)(tid);
+      tst->os_state.pthread = ARG1;
+      tst->arch.vex.guest_GS_0x60 = ARG1;
+      // SET_STATUS_Success(0x60);
+      // see comments on x86 case just above
+      SET_STATUS_from_SysRes(
+         VG_(mk_SysRes_amd64_darwin)(
+            VG_DARWIN_SYSNO_CLASS(__NR_thread_fast_set_cthread_self),
+            False, 0, 0x60
+         )
+      );
+   }
+
+#else
+#error unknown architecture
+#endif
+}
+
+/* ---------------------------------------------------------------------
+   syscall tables: x86 and amd64
+   ------------------------------------------------------------------ */
 
 #define _____(sysno) GENX_(sysno, sys_ni_syscall)  /* UNIX style only */
 
@@ -10256,6 +10332,13 @@ const UInt ML_(mach_trap_table_size) =
 
 const UInt ML_(mdep_trap_table_size) = 
             sizeof(ML_(mdep_trap_table)) / sizeof(ML_(mdep_trap_table)[0]);
+
+
+#endif // defined(VGA_x86) || defined(VGA_amd64)
+
+/* !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+   END: THE ABOVE CODE ARE FOR x86 AND amd64 ONLY
+   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! */
 
 #endif // defined(VGO_darwin)
 

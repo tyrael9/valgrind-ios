@@ -118,7 +118,7 @@
         (srP)->r_sp = r1;                                 \
         (srP)->misc.PPC64.r_lr = lr;                      \
       }
-#elif defined(VGP_arm_linux)
+#elif defined(VGP_arm_linux) || defined(VGP_arm_darwin)
 #  define GET_STARTREGS(srP)                              \
       { UInt block[6];                                    \
         __asm__ __volatile__(                             \

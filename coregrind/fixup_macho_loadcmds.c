@@ -232,7 +232,7 @@ static void unmap_image ( /*MOD*/ImageInfo* ii )
    the thin part is a 32 bit file.  Returns 64 if it's a 64 bit file.
    Does not return on failure.  Guarantees to return pointers to a
    valid(ish) Mach-O image if it succeeds. */
-static Int map_image_aboard ( /*OUT*/ImageInfo* ii, HChar* filename )
+static Int map_image_aboard ( /*OUT*/ImageInfo* ii, HChar* filename, Int target_cpu)
 {
    memset(ii, 0, sizeof(*ii));
 
@@ -295,14 +295,7 @@ static Int map_image_aboard ( /*OUT*/ImageInfo* ii, HChar* filename )
         for (f = 0, arch_be = (struct fat_arch *)(fh_be+1); 
              f < fh.nfat_arch;
              f++, arch_be++) {
-           Int cputype;
-#          if defined(PLAT_x86_darwin)
-           cputype = CPU_TYPE_X86;
-#          elif defined(PLAT_amd64_darwin)
-           cputype = CPU_TYPE_X86_64;
-#          else
-#            error "unknown architecture"
-#          endif
+           Int cputype = target_cpu;
            arch.cputype    = ntohl(arch_be->cputype);
            arch.cpusubtype = ntohl(arch_be->cpusubtype);
            arch.offset     = ntohl(arch_be->offset);
@@ -363,6 +356,88 @@ static Int map_image_aboard ( /*OUT*/ImageInfo* ii, HChar* filename )
    return 64;
 }
 
+void modify_macho_loadcmds_arm ( HChar* filename )
+{
+   ImageInfo ii;
+   memset(&ii, 0, sizeof(ii));
+
+   Int size = map_image_aboard( &ii, filename, CPU_TYPE_ARM);
+
+   assert(size == 32);
+
+   assert(ii.macho_img != NULL && ii.macho_img_szB > 0);
+   
+   struct segment_command* seg__pagezero = NULL;
+   
+   { struct mach_header *mh = (struct mach_header *)ii.macho_img;
+      struct load_command *cmd;
+      Int c;
+
+      for (c = 0, cmd = (struct load_command *)(mh+1);
+           c < mh->ncmds;
+           c++, cmd = (struct load_command *)(cmd->cmdsize
+                                              + (unsigned long)cmd)) {
+         if (DEBUGPRINTING)
+            printf("load cmd: offset %4lu   size %3d   kind %2d = ",
+                   (unsigned long)((UChar*)cmd - (UChar*)ii.macho_img),
+                   cmd->cmdsize, cmd->cmd);
+
+         switch (cmd->cmd) {
+            case LC_SEGMENT:
+               if (DEBUGPRINTING)
+                  printf("LC_SEGMENT");
+               break;
+            case LC_SYMTAB:
+               if (DEBUGPRINTING)
+                  printf("LC_SYMTAB");
+               break;
+            case LC_DYSYMTAB:
+               if (DEBUGPRINTING)
+                  printf("LC_DYSYMTAB");
+               break;
+            case LC_UUID:
+               if (DEBUGPRINTING)
+                  printf("LC_UUID");
+               break;
+            case LC_UNIXTHREAD:
+               if (DEBUGPRINTING)
+                  printf("LC_UNIXTHREAD");
+               break;
+            default:
+                  printf("???");
+            break;
+         }
+         if (DEBUGPRINTING)
+            printf("\n");
+
+         /* Note what the stated initial RSP value is, so we can
+            check it is as expected. */
+         if (cmd->cmd == LC_SEGMENT) {
+            struct segment_command *seg = (struct segment_command *)cmd;
+            if (0 == strcmp(seg->segname, "__PAGEZERO"))
+               seg__pagezero = seg;
+         }
+      }
+   }
+   
+   if (seg__pagezero) {
+      struct segment_command *seg = seg__pagezero;
+      fprintf(stderr, "fixup_macho_loadcmds:   "
+              "patching pagezero vmaddr from 0x%x to 0.\n", seg->vmaddr);
+      seg->vmaddr = 0;
+      /* success */
+      goto out;
+   }
+
+   /* out of options */
+   fail("no __PAGEZERO found; "
+        "out of options.");
+   /* NOTREACHED */
+
+  out:
+   if (ii.img)
+      unmap_image(&ii);
+}
 
 /*------------------------------------------------------------*/
 /*---                                                      ---*/
@@ -372,12 +447,13 @@ static Int map_image_aboard ( /*OUT*/ImageInfo* ii, HChar* filename )
 
 void modify_macho_loadcmds ( HChar* filename,
                              ULong  expected_stack_start,
-                             ULong  expected_stack_size )
+                             ULong  expected_stack_size,
+                             Int target_cpu )
 {
    ImageInfo ii;
    memset(&ii, 0, sizeof(ii));
 
-   Int size = map_image_aboard( &ii, filename );
+   Int size = map_image_aboard( &ii, filename, target_cpu );
    if (size == 32) {
       fprintf(stderr, "fixup_macho_loadcmds:   Is 32-bit MachO file;"
               " no modifications needed.\n");
@@ -590,6 +666,20 @@ static Bool is_plausible_tool_exe_name ( HChar* nm )
    return False;
 }
 
+static Bool is_arm_tool_exe_name ( HChar* nm )
+{
+   HChar* p;
+   if (!nm)
+      return False;
+
+   // Does it end with this string?
+   p = strstr(nm, "-arm-darwin");
+   if (p && 0 == strcmp(p, "-arm-darwin"))
+      return True;
+
+   return False;
+}
+
 
 int main ( int argc, char** argv )
 {
@@ -611,14 +701,24 @@ int main ( int argc, char** argv )
            "requested stack_addr (top) 0x%llx, "
            "stack_size 0x%llx\n", req_stack_addr, req_stack_size );
 
+   if (is_arm_tool_exe_name(argv[3])) {
+      fprintf(stderr, "fixup_macho_loadcmds: ARM 32-bit binary.\n");
+      modify_macho_loadcmds_arm( argv[3] );
+      return 0;
+   }
+
    if (!is_plausible_tool_exe_name(argv[3]))
       fail("implausible tool exe name -- not of the form *-{x86,amd64}-darwin");
 
    fprintf(stderr, "fixup_macho_loadcmds: examining tool exe: %s\n", 
            argv[3] );
+#if defined(PLAT_x86_darwin)
    modify_macho_loadcmds( argv[3], req_stack_addr - req_stack_size,
-                          req_stack_size );
-
+                          req_stack_size, CPU_TYPE_X86 );
+#elif defined(PLAT_amd64_darwin)
+   modify_macho_loadcmds( argv[3], req_stack_addr - req_stack_size,
+                          req_stack_size, CPU_TYPE_X86_64 );
+#endif
    return 0;
 }
 

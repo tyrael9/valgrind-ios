@@ -88,13 +88,13 @@ typedef
       // (which have o_arg field names) the o_arg value is the offset into
       // the vex register state.  For stack arguments (which have s_arg
       // field names), the s_arg value is the offset from the stack pointer.
-      Int o_sysno;
 #     if defined(VGP_x86_linux) || defined(VGP_amd64_linux) \
          || defined(VGP_ppc32_linux) \
          || defined(VGP_ppc64be_linux) || defined(VGP_ppc64le_linux) \
          || defined(VGP_arm_linux) || defined(VGP_s390x_linux) \
          || defined(VGP_mips64_linux) || defined(VGP_arm64_linux) \
          || defined(VGP_tilegx_linux)
+      Int o_sysno;
       Int o_arg1;
       Int o_arg2;
       Int o_arg3;
@@ -104,6 +104,7 @@ typedef
       Int uu_arg7;
       Int uu_arg8;
 #     elif defined(VGP_mips32_linux)
+      Int o_sysno;
       Int o_arg1;
       Int o_arg2;
       Int o_arg3;
@@ -113,28 +114,49 @@ typedef
       Int uu_arg7;
       Int uu_arg8;
 #     elif defined(VGP_x86_darwin)
-      Int s_arg1;
-      Int s_arg2;
-      Int s_arg3;
-      Int s_arg4;
-      Int s_arg5;
-      Int s_arg6;
-      Int s_arg7;
-      Int s_arg8;
+      Int osflags;   // 1 bit for each of the following field
+                     // 0 = register; 1 = stack
+      union{Int o_sysno; Int s_sysno;};  //UNIX Indirect: stack
+      union{Int o_arg1; Int s_arg1;};
+      union{Int o_arg2; Int s_arg2;};
+      union{Int o_arg3; Int s_arg3;};
+      union{Int o_arg4; Int s_arg4;};
+      union{Int o_arg5; Int s_arg5;};
+      union{Int o_arg6; Int s_arg6;};
+      union{Int o_arg7; Int s_arg7;};
+      union{Int o_arg8; Int s_arg8;};
 #     elif defined(VGP_amd64_darwin)
-      Int o_arg1;
-      Int o_arg2;
-      Int o_arg3;
-      Int o_arg4;
-      Int o_arg5;
-      Int o_arg6;
-      Int s_arg7;
-      Int s_arg8;
+      Int osflags;   // 1 bit for each of the following field
+                     // 0 = register; 1 = stack
+      union{Int o_sysno; Int s_sysno;};  //reg
+      union{Int o_arg1; Int s_arg1;};
+      union{Int o_arg2; Int s_arg2;};
+      union{Int o_arg3; Int s_arg3;};
+      union{Int o_arg4; Int s_arg4;};
+      union{Int o_arg5; Int s_arg5;};
+      union{Int o_arg6; Int s_arg6;};    //UNIX Indirect: stack, direct: reg
+      union{Int o_arg7; Int s_arg7;};
+      union{Int o_arg8; Int s_arg8;};
+#     elif defined(VGP_arm_darwin)
+      Int osflags;    // 1 bit for each of the following field
+                      // 0 = register; 1 = stack
+      union{Int o_sysno; Int s_sysno;};   //reg
+      union{Int o_arg1; Int s_arg1;};
+      union{Int o_arg2; Int s_arg2;};
+      union{Int o_arg3; Int s_arg3;};
+      union{Int o_arg4; Int s_arg4;};
+      union{Int o_arg5; Int s_arg5;};
+      union{Int o_arg6; Int s_arg6;};
+      union{Int o_arg7; Int s_arg7;};  //UNIX Indirect: stack, direct: reg
+      union{Int o_arg8; Int s_arg8;};  //UNIX: stack, MACH: reg   
 #     else
 #       error "Unknown platform"
 #     endif
    }
    SyscallArgLayout;
+   
+#define SyscallArgLayout_REG     0
+#define SyscallArgLayout_STACK   1
 
 /* Flags describing syscall wrappers */
 #define SfMayBlock      (1 << 1) /* may block                         */
@@ -295,7 +317,13 @@ extern const UInt ML_(syscall_table_size);
    table. */
 #define LINX_(sysno, name)    WRAPPER_ENTRY_X_(linux, sysno, name) 
 #define LINXY(sysno, name)    WRAPPER_ENTRY_XY(linux, sysno, name)
-
+       
+/* Add a darwin-specific, arch-independent wrapper to a syscall
+   table. */
+#if defined(VGO_darwin)
+#define MACX_(sysno, name)    WRAPPER_ENTRY_X_(darwin, VG_DARWIN_SYSNO_INDEX(sysno), name) 
+#define MACXY(sysno, name)    WRAPPER_ENTRY_XY(darwin, VG_DARWIN_SYSNO_INDEX(sysno), name)
+#endif
 
 /* ---------------------------------------------------------------------
    Macros useful for writing wrappers concisely.  These refer to the
@@ -380,8 +408,11 @@ static inline UWord getERR ( SyscallStatus* st ) {
    these assume little-endianness.  These can only be used in
    pre-wrappers, and they refer to the layout parameter passed in. */
 /* PRRSN == "pre-register-read-sysno"
+   PRSRSN == "pre-register-or-stack-read-sysno"
+   PGRSN == "pre-general-read-sysno"
    PRRAn == "pre-register-read-argument"
    PSRAn == "pre-stack-read-argument"
+   PRSRAn == "pre-register-or-stack-read-argument"
    PRAn  == "pre-read-argument"
 */
 
@@ -405,25 +436,37 @@ static inline UWord getERR ( SyscallStatus* st ) {
 
 #elif defined(VGP_x86_darwin)
    /* Up to 8 parameters, all on the stack. */
-#  define PRA1(s,t,a) PSRAn(1,s,t,a)
-#  define PRA2(s,t,a) PSRAn(2,s,t,a)
-#  define PRA3(s,t,a) PSRAn(3,s,t,a)
-#  define PRA4(s,t,a) PSRAn(4,s,t,a)
-#  define PRA5(s,t,a) PSRAn(5,s,t,a)
-#  define PRA6(s,t,a) PSRAn(6,s,t,a)
-#  define PRA7(s,t,a) PSRAn(7,s,t,a)
-#  define PRA8(s,t,a) PSRAn(8,s,t,a)
+#  define PRA1(s,t,a) PRSRAn(1,s,t,a)
+#  define PRA2(s,t,a) PRSRAn(2,s,t,a)
+#  define PRA3(s,t,a) PRSRAn(3,s,t,a)
+#  define PRA4(s,t,a) PRSRAn(4,s,t,a)
+#  define PRA5(s,t,a) PRSRAn(5,s,t,a)
+#  define PRA6(s,t,a) PRSRAn(6,s,t,a)
+#  define PRA7(s,t,a) PRSRAn(7,s,t,a)
+#  define PRA8(s,t,a) PRSRAn(8,s,t,a)
 
 #elif defined(VGP_amd64_darwin)
    /* Up to 8 parameters, 6 in registers, 2 on the stack. */
-#  define PRA1(s,t,a) PRRAn(1,s,t,a)
-#  define PRA2(s,t,a) PRRAn(2,s,t,a)
-#  define PRA3(s,t,a) PRRAn(3,s,t,a)
-#  define PRA4(s,t,a) PRRAn(4,s,t,a)
-#  define PRA5(s,t,a) PRRAn(5,s,t,a)
-#  define PRA6(s,t,a) PRRAn(6,s,t,a)
-#  define PRA7(s,t,a) PSRAn(7,s,t,a)
-#  define PRA8(s,t,a) PSRAn(8,s,t,a)
+#  define PRA1(s,t,a) PRSRAn(1,s,t,a)
+#  define PRA2(s,t,a) PRSRAn(2,s,t,a)
+#  define PRA3(s,t,a) PRSRAn(3,s,t,a)
+#  define PRA4(s,t,a) PRSRAn(4,s,t,a)
+#  define PRA5(s,t,a) PRSRAn(5,s,t,a)
+#  define PRA6(s,t,a) PRSRAn(6,s,t,a)
+#  define PRA7(s,t,a) PRSRAn(7,s,t,a)
+#  define PRA8(s,t,a) PRSRAn(8,s,t,a)        
+
+#elif defined(VGP_arm_darwin)
+   /* Up to 8 parameters, 7 in registers, 1 on the stack (UNIX) */
+   /* Or 8 in registers (MACH) */
+#  define PRA1(s,t,a) PRSRAn(1,s,t,a)
+#  define PRA2(s,t,a) PRSRAn(2,s,t,a)
+#  define PRA3(s,t,a) PRSRAn(3,s,t,a)
+#  define PRA4(s,t,a) PRSRAn(4,s,t,a)
+#  define PRA5(s,t,a) PRSRAn(5,s,t,a)
+#  define PRA6(s,t,a) PRSRAn(6,s,t,a)
+#  define PRA7(s,t,a) PRSRAn(7,s,t,a)
+#  define PRA8(s,t,a) PRSRAn(8,s,t,a)
 
 #else
 #  error Unknown platform
@@ -434,6 +477,25 @@ static inline UWord getERR ( SyscallStatus* st ) {
 #define PRRSN \
       VG_(tdict).track_pre_reg_read(Vg_CoreSysCall, tid, "(syscallno)", \
                                     layout->o_sysno, sizeof(UWord));
+#define PRSRSN \
+     do {                                                                     \
+        if((layout->osflags & 1) == SyscallArgLayout_REG) {                   \
+           VG_(tdict).track_pre_reg_read(Vg_CoreSysCall, tid, "(syscallno)",  \
+                                       layout->o_sysno, sizeof(UWord));       \
+        }                                                                     \
+        else {                                                                \
+           VG_(tdict).track_pre_mem_read(Vg_CoreSysCallArgInMem, tid, "(syscallno)",  \
+                             layout->s_sysno + VG_(get_SP)(tid), sizeof(UWord));      \
+        }                                                                     \
+     } while (0)
+        
+#if defined(VGO_darwin)
+#define PGRSN  PRSRSN
+#elif defined(VGO_linux)
+#define PGRSN  PRRSN
+#else
+#  error Unknown platform
+#endif
 
 /* REGISTER PARAMETERS */
 
@@ -546,60 +608,70 @@ static inline UWord getERR ( SyscallStatus* st ) {
 #else
 #  error "Unknown endianness"
 #endif
+      
+
+#define PRSRAn(n,s,t,a)                                           \
+   do {                                                           \
+      if((layout->osflags & (1 << n)) == SyscallArgLayout_REG) {  \
+         PRRAn(n,s,t,a);                                          \
+      }                                                           \
+      else {                                                      \
+         PSRAn(n,s,t,a);                                          \
+      }                                                           \
+   } while (0)                                                    \
 
 
 #define PRE_REG_READ0(tr, s) \
    if (VG_(tdict).track_pre_reg_read) { \
-      PRRSN; \
+      PGRSN; \
    }
 #define PRE_REG_READ1(tr, s, t1, a1) \
    if (VG_(tdict).track_pre_reg_read) { \
-      PRRSN; \
+      PGRSN; \
       PRA1(s,t1,a1);                            \
    }
 #define PRE_REG_READ2(tr, s, t1, a1, t2, a2) \
    if (VG_(tdict).track_pre_reg_read) { \
-      PRRSN; \
+      PGRSN; \
       PRA1(s,t1,a1); PRA2(s,t2,a2);           \
    }
 #define PRE_REG_READ3(tr, s, t1, a1, t2, a2, t3, a3) \
    if (VG_(tdict).track_pre_reg_read) { \
-      PRRSN; \
+      PGRSN; \
       PRA1(s,t1,a1); PRA2(s,t2,a2); PRA3(s,t3,a3);  \
    }
 #define PRE_REG_READ4(tr, s, t1, a1, t2, a2, t3, a3, t4, a4) \
    if (VG_(tdict).track_pre_reg_read) { \
-      PRRSN; \
+      PGRSN; \
       PRA1(s,t1,a1); PRA2(s,t2,a2); PRA3(s,t3,a3);  \
       PRA4(s,t4,a4);                                    \
    }
 #define PRE_REG_READ5(tr, s, t1, a1, t2, a2, t3, a3, t4, a4, t5, a5) \
    if (VG_(tdict).track_pre_reg_read) { \
-      PRRSN; \
+      PGRSN; \
       PRA1(s,t1,a1); PRA2(s,t2,a2); PRA3(s,t3,a3);  \
       PRA4(s,t4,a4); PRA5(s,t5,a5);                   \
    }
 #define PRE_REG_READ6(tr, s, t1, a1, t2, a2, t3, a3, t4, a4, t5, a5, t6, a6) \
    if (VG_(tdict).track_pre_reg_read) { \
-      PRRSN; \
+      PGRSN; \
       PRA1(s,t1,a1); PRA2(s,t2,a2); PRA3(s,t3,a3);   \
       PRA4(s,t4,a4); PRA5(s,t5,a5); PRA6(s,t6,a6);   \
    }
 #define PRE_REG_READ7(tr, s, t1, a1, t2, a2, t3, a3, t4, a4, t5, a5, t6, a6, t7, a7) \
    if (VG_(tdict).track_pre_reg_read) { \
-      PRRSN; \
+      PGRSN; \
       PRA1(s,t1,a1); PRA2(s,t2,a2); PRA3(s,t3,a3);   \
       PRA4(s,t4,a4); PRA5(s,t5,a5); PRA6(s,t6,a6);   \
       PRA7(s,t7,a7);                                     \
    }
-
 #define PRE_REG_READ8(tr, s, t1, a1, t2, a2, t3, a3, t4, a4, t5, a5, t6, a6, t7, a7, t8, a8) \
    if (VG_(tdict).track_pre_reg_read) { \
-      PRRSN; \
+      PGRSN; \
       PRA1(s,t1,a1); PRA2(s,t2,a2); PRA3(s,t3,a3);   \
       PRA4(s,t4,a4); PRA5(s,t5,a5); PRA6(s,t6,a6);   \
       PRA7(s,t7,a7); PRA8(s,t8,a8);                    \
-   }
+   } 
 
 #define PRE_MEM_READ(zzname, zzaddr, zzlen) \
    VG_TRACK( pre_mem_read, Vg_CoreSysCall, tid, zzname, zzaddr, zzlen)

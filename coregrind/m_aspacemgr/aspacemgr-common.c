@@ -162,7 +162,7 @@ SysRes VG_(am_do_mmap_NO_NOTIFY)( Addr start, SizeT length, UInt prot,
         || defined(VGP_tilegx_linux)
    res = VG_(do_syscall6)(__NR_mmap, (UWord)start, length, 
                          prot, flags, fd, offset);
-#  elif defined(VGP_x86_darwin)
+#  elif defined(VGP_x86_darwin) || defined(VGP_arm_darwin)
    if (fd == 0  &&  (flags & VKI_MAP_ANONYMOUS)) {
        fd = -1;  // MAP_ANON with fd==0 is EINVAL
    }

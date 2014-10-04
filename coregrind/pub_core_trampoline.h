@@ -140,6 +140,10 @@ extern UInt VG_(amd64_darwin_REDIR_FOR_arc4random)( void );
 # endif
 #endif
 
+#if defined(VGP_arm_darwin)
+extern Addr  VG_(arm_darwin_SUBST_FOR_sigreturn);
+#endif
+
 #if defined(VGP_s390x_linux)
 extern Addr VG_(s390x_linux_SUBST_FOR_sigreturn);
 extern Addr VG_(s390x_linux_SUBST_FOR_rt_sigreturn);

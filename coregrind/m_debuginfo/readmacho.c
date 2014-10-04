@@ -32,6 +32,7 @@
 #if defined(VGO_darwin)
 
 #include "pub_core_basics.h"
+#include "pub_core_vkiscnums.h"  // system call numbers
 #include "pub_core_vki.h"
 #include "pub_core_libcbase.h"
 #include "pub_core_libcprint.h"
@@ -46,6 +47,9 @@
 #include "pub_core_xarray.h"
 #include "pub_core_clientstate.h"
 #include "pub_core_debuginfo.h"
+#include "pub_core_syscall.h"    // VG_(do_syscallN)
+                                 // VG_(mk_SysRes_Error)
+                                 // VG_(mk_SysRes_Success)
 
 #include "priv_misc.h"
 #include "priv_image.h"
@@ -204,6 +208,8 @@ static DiSlice map_image_aboard ( DebugInfo* di, /* only for err msgs */
          Int cputype = CPU_TYPE_X86;
 #        elif defined(VGA_amd64)
          Int cputype = CPU_TYPE_X86_64;
+#        elif defined(VGA_arm)
+         Int cputype = CPU_TYPE_ARM;
 #        else
 #          error "unknown architecture"
 #        endif
@@ -347,6 +353,97 @@ void read_symtab( /*OUT*/XArray* /* DiSym */ syms,
       HChar* name
          = ML_(cur_read_strdup)( ML_(cur_plus)(strtab_cur, nl.n_un.n_strx),
                                  "di.read_symtab.2");
+
+      /* skip nameless symbols; these appear to be common, but
+         useless */
+      if (*name == 0) {
+         ML_(dinfo_free)(name);
+         continue;
+      }
+
+      VG_(bzero_inline)(&disym, sizeof(disym));
+      disym.avmas.main = sym_addr;
+      SET_TOCPTR_AVMA(disym, 0);
+      SET_LOCAL_EP_AVMA(disym, 0);
+      disym.pri_name   = ML_(addStr)(di, name, -1);
+      disym.sec_names  = NULL;
+      disym.size       = // let canonicalize fix it
+                         di->text_avma+di->text_size - sym_addr;
+      disym.isText     = True;
+      disym.isIFunc    = False;
+      // Lots of user function names get prepended with an underscore.  Eg. the
+      // function 'f' becomes the symbol '_f'.  And the "below main"
+      // function is called "start".  So we skip the leading underscore, and
+      // if we see 'start' and --show-below-main=no, we rename it as
+      // "start_according_to_valgrind", which makes it easy to spot later
+      // and display as "(below main)".
+      if (disym.pri_name[0] == '_') {
+         disym.pri_name++;
+      } 
+      else if (!VG_(clo_show_below_main) && VG_STREQ(disym.pri_name, "start")) {
+         if (s_a_t_v == NULL)
+            s_a_t_v = ML_(addStr)(di, "start_according_to_valgrind", -1);
+         vg_assert(s_a_t_v);
+         disym.pri_name = s_a_t_v;
+      }
+
+      vg_assert(disym.pri_name);
+      VG_(addToXA)( syms, &disym );
+      ML_(dinfo_free)(name);
+   }
+}
+
+/* Read a symbol table (nlist) from memory instead of disk image.  
+   Add the resulting candidate symbols to 'syms'; the caller will
+   post-process them and hand them off to ML_(addSym) itself. */
+static
+void read_symtab_memory( /*OUT*/XArray* /* DiSym */ syms,
+                  struct _DebugInfo* di, 
+                  Addr symtab_cur, UInt symtab_count,
+                  Addr strtab_cur)
+{
+   Int    i;
+   DiSym  disym;
+
+   // "start_according_to_valgrind"
+   static HChar* s_a_t_v = NULL; /* do not make non-static */
+
+   for (i = 0; i < symtab_count; i++) {
+      struct NLIST nl;
+      VG_(memcpy)(&nl, (void *)(symtab_cur + (i * sizeof(struct NLIST))), sizeof(nl));
+
+      Addr sym_addr = 0;
+      if ((nl.n_type & N_TYPE) == N_SECT) {
+         sym_addr = di->text_bias + nl.n_value;
+      /*} else if ((nl.n_type & N_TYPE) == N_ABS) {
+         GrP fixme don't ignore absolute symbols?
+         sym_addr = nl.n_value; */
+      } else {
+         continue;
+      }
+      
+      if (di->trace_symtab) {
+         HChar* str = ML_(dinfo_strdup)(
+                         "di.read_symtab.1", (const HChar *)(strtab_cur + nl.n_un.n_strx));
+         VG_(printf)("nlist raw: avma %010lx  %s\n", sym_addr, str );
+         ML_(dinfo_free)(str);
+      }
+
+      /* If no part of the symbol falls within the mapped range,
+         ignore it. */
+      if (sym_addr <= di->text_avma
+          || sym_addr >= di->text_avma+di->text_size) {
+         continue;
+      }
+
+      /* skip names which point outside the string table;
+         following these risks segfaulting Valgrind */
+      if (nl.n_un.n_strx < 0) {
+         continue;
+      }
+
+      HChar* name
+         = ML_(dinfo_strdup)("di.read_symtab.2", (const HChar *)(strtab_cur + nl.n_un.n_strx));
 
       /* skip nameless symbols; these appear to be common, but
          useless */
@@ -695,14 +792,221 @@ static Bool is_systemish_library_name ( const HChar* name )
    }
 }
 
+Bool static read_dwarf_info( struct _DebugInfo *di, UChar *uuid )
+{
+   HChar*   dsymfilename = NULL;
+   DiSlice  dsli         = DiSlice_INVALID; // the debuginfo image
+   DiSlice debug_info_mscn;
+   
+    /* mmap the dSYM file to look for DWARF debug info.  If successful,
+       use the .macho_img and .macho_img_szB in dsli. */
+
+    dsymfilename = find_separate_debug_file( di->fsm.filename );
+
+    /* Try to load it. */
+    if (dsymfilename) {
+       Bool valid;
+
+       if (VG_(clo_verbosity) > 1)
+          VG_(message)(Vg_DebugMsg, "   dSYM= %s\n", dsymfilename);
+
+       dsli = map_image_aboard( di, dsymfilename );
+       if (!ML_(sli_is_valid)(dsli)) {
+          ML_(symerr)(di, False, "Connect to debuginfo image failed "
+                                 "(first attempt).");
+          goto fail;
+       }
+
+       valid = dsli.img && dsli.szB > 0 && check_uuid_matches( dsli, uuid );
+       if (valid)
+          goto read_the_dwarf;
+
+       if (VG_(clo_verbosity) > 1)
+          VG_(message)(Vg_DebugMsg, "   dSYM does not have "
+                                    "correct UUID (out of date?)\n");
+    }
+
+    /* There was no dsym file, or it doesn't match.  We'll have to try
+       regenerating it, unless --dsymutil=no, in which case just complain
+       instead. */
+
+    /* If this looks like a lib that we shouldn't run dsymutil on, just
+       give up.  (possible reasons: is system lib, or in /usr etc, or
+       the dsym dir would not be writable by the user, or we're running
+       as root) */
+    vg_assert(di->fsm.filename);
+    if (is_systemish_library_name(di->fsm.filename))
+       goto success;
+
+    if (!VG_(clo_dsymutil)) {
+       if (VG_(clo_verbosity) == 1) {
+          VG_(message)(Vg_DebugMsg, "%s:\n", di->fsm.filename);
+       }
+       if (VG_(clo_verbosity) > 0)
+          VG_(message)(Vg_DebugMsg, "%sdSYM directory %s; consider using "
+                       "--dsymutil=yes\n",
+                       VG_(clo_verbosity) > 1 ? "   " : "",
+                       dsymfilename ? "has wrong UUID" : "is missing"); 
+       goto success;
+    }
+
+    /* Run dsymutil */
+
+    { Int r;
+      const HChar* dsymutil = "/usr/bin/dsymutil ";
+      HChar* cmd = ML_(dinfo_zalloc)( "di.readmacho.tmp1", 
+                                      VG_(strlen)(dsymutil)
+                                      + VG_(strlen)(di->fsm.filename)
+                                      + 32 /* misc */ );
+      VG_(strcpy)(cmd, dsymutil);
+      if (0) VG_(strcat)(cmd, "--verbose ");
+      VG_(strcat)(cmd, "\"");
+      VG_(strcat)(cmd, di->fsm.filename);
+      VG_(strcat)(cmd, "\"");
+      VG_(message)(Vg_DebugMsg, "run: %s\n", cmd);
+      r = VG_(system)( cmd );
+      if (r)
+         VG_(message)(Vg_DebugMsg, "run: %s FAILED\n", dsymutil);
+      ML_(dinfo_free)(cmd);
+      dsymfilename = find_separate_debug_file(di->fsm.filename);
+    }
+
+    /* Try again to load it. */
+    if (dsymfilename) {
+       Bool valid;
+
+       if (VG_(clo_verbosity) > 1)
+          VG_(message)(Vg_DebugMsg, "   dsyms= %s\n", dsymfilename);
+
+       dsli = map_image_aboard( di, dsymfilename );
+       if (!ML_(sli_is_valid)(dsli)) {
+          ML_(symerr)(di, False, "Connect to debuginfo image failed "
+                                 "(second attempt).");
+          goto fail;
+       }
+
+       valid = dsli.img && dsli.szB > 0 && check_uuid_matches( dsli, uuid );
+       if (!valid) {
+          if (VG_(clo_verbosity) > 0) {
+             VG_(message)(Vg_DebugMsg,
+                "WARNING: did not find expected UUID %02X%02X%02X%02X"
+                "-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X"
+                " in dSYM dir\n",
+                (UInt)uuid[0], (UInt)uuid[1], (UInt)uuid[2], (UInt)uuid[3],
+                (UInt)uuid[4], (UInt)uuid[5], (UInt)uuid[6], (UInt)uuid[7],
+                (UInt)uuid[8], (UInt)uuid[9], (UInt)uuid[10],
+                (UInt)uuid[11], (UInt)uuid[12], (UInt)uuid[13],
+                (UInt)uuid[14], (UInt)uuid[15] );
+             VG_(message)(Vg_DebugMsg,
+                          "WARNING: for %s\n", di->fsm.filename);
+          }
+          unmap_image( &dsli );
+          /* unmap_image zeroes out dsli, so it's safe for "fail:" to
+             re-try unmap_image. */
+          goto fail;
+       }
+    }
+
+   /* Right.  Finally we have our best try at the dwarf image, so go
+      on to reading stuff out of it. */
+
+  read_the_dwarf:
+   if (ML_(sli_is_valid)(dsli) && dsli.szB > 0) {
+      // "_mscn" is "mach-o section"
+      DiSlice debug_info_mscn
+         = getsectdata(dsli, "__DWARF", "__debug_info", NULL);
+      DiSlice debug_abbv_mscn
+         = getsectdata(dsli, "__DWARF", "__debug_abbrev", NULL);
+      DiSlice debug_line_mscn
+         = getsectdata(dsli, "__DWARF", "__debug_line", NULL);
+      DiSlice debug_str_mscn
+         = getsectdata(dsli, "__DWARF", "__debug_str", NULL);
+      DiSlice debug_ranges_mscn
+         = getsectdata(dsli, "__DWARF", "__debug_ranges", NULL);
+      DiSlice debug_loc_mscn
+         = getsectdata(dsli, "__DWARF", "__debug_loc", NULL);
+
+      /* It appears (jrs, 2014-oct-19) that section "__eh_frame" in
+         segment "__TEXT" appears in both the main and dsym files, but
+         only the main one gives the right results.  Since it's in the
+         __TEXT segment, we calculate the __eh_frame avma using its
+         svma and the text bias, and that sounds reasonable. */
+      Addr eh_frame_svma = 0;
+      DiSlice eh_frame_mscn
+         = getsectdata(msli, "__TEXT", "__eh_frame", &eh_frame_svma);
+
+      if (ML_(sli_is_valid)(eh_frame_mscn)) {
+         vg_assert(di->text_bias == di->text_debug_bias);
+         ML_(read_callframe_info_dwarf3)(di, eh_frame_mscn,
+                                         eh_frame_svma + di->text_bias,
+                                         True/*is_ehframe*/);
+      }
+
+      if (ML_(sli_is_valid)(debug_info_mscn)) {
+          if (VG_(clo_verbosity) > 1) {
+             if (0)
+             VG_(message)(Vg_DebugMsg,
+                          "Reading dwarf3 for %s (%#lx) from %s"
+                          " (%lld %lld %lld %lld %lld %lld)\n",
+                          di->fsm.filename, di->text_avma, dsymfilename,
+                          debug_info_mscn.szB, debug_abbv_mscn.szB,
+                          debug_line_mscn.szB, debug_str_mscn.szB,
+                          debug_ranges_mscn.szB, debug_loc_mscn.szB
+                          );
+             VG_(message)(Vg_DebugMsg,
+                "   reading dwarf3 from dsyms file\n");
+          }
+          /* The old reader: line numbers and unwind info only */
+          ML_(read_debuginfo_dwarf3) ( di,
+                                       debug_info_mscn,
+   			      DiSlice_INVALID, /* .debug_types */
+                                       debug_abbv_mscn,
+                                       debug_line_mscn,
+                                       debug_str_mscn,
+                                       DiSlice_INVALID /* ALT .debug_str */ );
+
+          /* The new reader: read the DIEs in .debug_info to acquire
+             information on variable types and locations.  But only if
+             the tool asks for it, or the user requests it on the
+             command line. */
+          if (VG_(needs).var_info /* the tool requires it */
+              || VG_(clo_read_var_info) /* the user asked for it */) {
+             ML_(new_dwarf3_reader)(
+                di, debug_info_mscn,
+                    DiSlice_INVALID, /* .debug_types */
+                    debug_abbv_mscn,
+                    debug_line_mscn,
+                    debug_str_mscn,
+                    debug_ranges_mscn,
+                    debug_loc_mscn,
+                    DiSlice_INVALID, /* ALT .debug_info */
+                    DiSlice_INVALID, /* ALT .debug_abbv */
+                    DiSlice_INVALID, /* ALT .debug_line */
+                    DiSlice_INVALID  /* ALT .debug_str */
+             );
+          }
+       }
+    }
+
+    if (dsymfilename) ML_(dinfo_free)(dsymfilename);
+    
+success:
+     unmap_image(&dsli);
+     return True;
+
+     /* NOTREACHED */
+
+fail:
+     unmap_image(&dsli);
+     return False;
+}
+
 
 Bool ML_(read_macho_debug_info)( struct _DebugInfo* di )
 {
    DiSlice  msli         = DiSlice_INVALID; // the main image
-   DiSlice  dsli         = DiSlice_INVALID; // the debuginfo image
    DiCursor sym_cur      = DiCursor_INVALID;
    DiCursor dysym_cur    = DiCursor_INVALID;
-   HChar*   dsymfilename = NULL;
    Bool     have_uuid    = False;
    UChar    uuid[16];
    Word     i;
@@ -868,7 +1172,9 @@ Bool ML_(read_macho_debug_info)( struct _DebugInfo* di )
             }
          }
          else if (cmd.cmd == LC_UUID) {
-             ML_(cur_read_get)(&uuid, cmd_cur, sizeof(uuid));
+             struct uuid_command uuidcmd;
+             ML_(cur_read_get)(&uuidcmd, cmd_cur, sizeof(uuidcmd));
+             VG_(memcpy)(uuid, &(uuidcmd.uuid[0]), sizeof(uuid));
              have_uuid = True;
          }
          // Move the cursor along
@@ -976,206 +1282,11 @@ Bool ML_(read_macho_debug_info)( struct _DebugInfo* di )
    if (!have_uuid)
       goto success;
 
-   /* mmap the dSYM file to look for DWARF debug info.  If successful,
-      use the .macho_img and .macho_img_szB in dsli. */
-
-   dsymfilename = find_separate_debug_file( di->fsm.filename );
-
-   /* Try to load it. */
-   if (dsymfilename) {
-      Bool valid;
-
-      if (VG_(clo_verbosity) > 1)
-         VG_(message)(Vg_DebugMsg, "   dSYM= %s\n", dsymfilename);
-
-      dsli = map_image_aboard( di, dsymfilename );
-      if (!ML_(sli_is_valid)(dsli)) {
-         ML_(symerr)(di, False, "Connect to debuginfo image failed "
-                                "(first attempt).");
-         goto fail;
-      }
-
-      /* check it has the right uuid. */
-      vg_assert(have_uuid);
-      valid = dsli.img && dsli.szB > 0 && check_uuid_matches( dsli, uuid );
-      if (valid)
-         goto read_the_dwarf;
-
-      if (VG_(clo_verbosity) > 1)
-         VG_(message)(Vg_DebugMsg, "   dSYM does not have "
-                                   "correct UUID (out of date?)\n");
-   }
-
-   /* There was no dsym file, or it doesn't match.  We'll have to try
-      regenerating it, unless --dsymutil=no, in which case just complain
-      instead. */
-
-   /* If this looks like a lib that we shouldn't run dsymutil on, just
-      give up.  (possible reasons: is system lib, or in /usr etc, or
-      the dsym dir would not be writable by the user, or we're running
-      as root) */
-   vg_assert(di->fsm.filename);
-   if (is_systemish_library_name(di->fsm.filename))
-      goto success;
-
-   if (!VG_(clo_dsymutil)) {
-      if (VG_(clo_verbosity) == 1) {
-         VG_(message)(Vg_DebugMsg, "%s:\n", di->fsm.filename);
-      }
-      if (VG_(clo_verbosity) > 0)
-         VG_(message)(Vg_DebugMsg, "%sdSYM directory %s; consider using "
-                      "--dsymutil=yes\n",
-                      VG_(clo_verbosity) > 1 ? "   " : "",
-                      dsymfilename ? "has wrong UUID" : "is missing"); 
-      goto success;
-   }
-
-   /* Run dsymutil */
-
-   { Int r;
-     const HChar* dsymutil = "/usr/bin/dsymutil ";
-     HChar* cmd = ML_(dinfo_zalloc)( "di.readmacho.tmp1", 
-                                     VG_(strlen)(dsymutil)
-                                     + VG_(strlen)(di->fsm.filename)
-                                     + 32 /* misc */ );
-     VG_(strcpy)(cmd, dsymutil);
-     if (0) VG_(strcat)(cmd, "--verbose ");
-     VG_(strcat)(cmd, "\"");
-     VG_(strcat)(cmd, di->fsm.filename);
-     VG_(strcat)(cmd, "\"");
-     VG_(message)(Vg_DebugMsg, "run: %s\n", cmd);
-     r = VG_(system)( cmd );
-     if (r)
-        VG_(message)(Vg_DebugMsg, "run: %s FAILED\n", dsymutil);
-     ML_(dinfo_free)(cmd);
-     dsymfilename = find_separate_debug_file(di->fsm.filename);
-   }
-
-   /* Try again to load it. */
-   if (dsymfilename) {
-      Bool valid;
-
-      if (VG_(clo_verbosity) > 1)
-         VG_(message)(Vg_DebugMsg, "   dsyms= %s\n", dsymfilename);
-
-      dsli = map_image_aboard( di, dsymfilename );
-      if (!ML_(sli_is_valid)(dsli)) {
-         ML_(symerr)(di, False, "Connect to debuginfo image failed "
-                                "(second attempt).");
-         goto fail;
-      }
-
-      /* check it has the right uuid. */
-      vg_assert(have_uuid);
-      vg_assert(have_uuid);
-      valid = dsli.img && dsli.szB > 0 && check_uuid_matches( dsli, uuid );
-      if (!valid) {
-         if (VG_(clo_verbosity) > 0) {
-            VG_(message)(Vg_DebugMsg,
-               "WARNING: did not find expected UUID %02X%02X%02X%02X"
-               "-%02X%02X-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X"
-               " in dSYM dir\n",
-               (UInt)uuid[0], (UInt)uuid[1], (UInt)uuid[2], (UInt)uuid[3],
-               (UInt)uuid[4], (UInt)uuid[5], (UInt)uuid[6], (UInt)uuid[7],
-               (UInt)uuid[8], (UInt)uuid[9], (UInt)uuid[10],
-               (UInt)uuid[11], (UInt)uuid[12], (UInt)uuid[13],
-               (UInt)uuid[14], (UInt)uuid[15] );
-            VG_(message)(Vg_DebugMsg,
-                         "WARNING: for %s\n", di->fsm.filename);
-         }
-         unmap_image( &dsli );
-         /* unmap_image zeroes out dsli, so it's safe for "fail:" to
-            re-try unmap_image. */
-         goto fail;
-      }
-   }
-
-   /* Right.  Finally we have our best try at the dwarf image, so go
-      on to reading stuff out of it. */
-
-  read_the_dwarf:
-   if (ML_(sli_is_valid)(dsli) && dsli.szB > 0) {
-      // "_mscn" is "mach-o section"
-      DiSlice debug_info_mscn
-         = getsectdata(dsli, "__DWARF", "__debug_info", NULL);
-      DiSlice debug_abbv_mscn
-         = getsectdata(dsli, "__DWARF", "__debug_abbrev", NULL);
-      DiSlice debug_line_mscn
-         = getsectdata(dsli, "__DWARF", "__debug_line", NULL);
-      DiSlice debug_str_mscn
-         = getsectdata(dsli, "__DWARF", "__debug_str", NULL);
-      DiSlice debug_ranges_mscn
-         = getsectdata(dsli, "__DWARF", "__debug_ranges", NULL);
-      DiSlice debug_loc_mscn
-         = getsectdata(dsli, "__DWARF", "__debug_loc", NULL);
-
-      /* It appears (jrs, 2014-oct-19) that section "__eh_frame" in
-         segment "__TEXT" appears in both the main and dsym files, but
-         only the main one gives the right results.  Since it's in the
-         __TEXT segment, we calculate the __eh_frame avma using its
-         svma and the text bias, and that sounds reasonable. */
-      Addr eh_frame_svma = 0;
-      DiSlice eh_frame_mscn
-         = getsectdata(msli, "__TEXT", "__eh_frame", &eh_frame_svma);
-
-      if (ML_(sli_is_valid)(eh_frame_mscn)) {
-         vg_assert(di->text_bias == di->text_debug_bias);
-         ML_(read_callframe_info_dwarf3)(di, eh_frame_mscn,
-                                         eh_frame_svma + di->text_bias,
-                                         True/*is_ehframe*/);
-      }
-   
-      if (ML_(sli_is_valid)(debug_info_mscn)) {
-         if (VG_(clo_verbosity) > 1) {
-            if (0)
-            VG_(message)(Vg_DebugMsg,
-                         "Reading dwarf3 for %s (%#lx) from %s"
-                         " (%lld %lld %lld %lld %lld %lld)\n",
-                         di->fsm.filename, di->text_avma, dsymfilename,
-                         debug_info_mscn.szB, debug_abbv_mscn.szB,
-                         debug_line_mscn.szB, debug_str_mscn.szB,
-                         debug_ranges_mscn.szB, debug_loc_mscn.szB
-                         );
-            VG_(message)(Vg_DebugMsg,
-               "   reading dwarf3 from dsyms file\n");
-         }
-         /* The old reader: line numbers and unwind info only */
-         ML_(read_debuginfo_dwarf3) ( di,
-                                      debug_info_mscn,
-				      DiSlice_INVALID, /* .debug_types */
-                                      debug_abbv_mscn,
-                                      debug_line_mscn,
-                                      debug_str_mscn,
-                                      DiSlice_INVALID /* ALT .debug_str */ );
-
-         /* The new reader: read the DIEs in .debug_info to acquire
-            information on variable types and locations or inline info.
-            But only if the tool asks for it, or the user requests it on
-            the command line. */
-         if (VG_(clo_read_var_info) /* the user or tool asked for it */
-             || VG_(clo_read_inline_info)) {
-            ML_(new_dwarf3_reader)(
-               di, debug_info_mscn,
-                   DiSlice_INVALID, /* .debug_types */
-                   debug_abbv_mscn,
-                   debug_line_mscn,
-                   debug_str_mscn,
-                   debug_ranges_mscn,
-                   debug_loc_mscn,
-                   DiSlice_INVALID, /* ALT .debug_info */
-                   DiSlice_INVALID, /* ALT .debug_abbv */
-                   DiSlice_INVALID, /* ALT .debug_line */
-                   DiSlice_INVALID  /* ALT .debug_str */
-            );
-         }
-      }
-   }
-
-   if (dsymfilename) ML_(dinfo_free)(dsymfilename);
+   if(!read_dwarf_info(di, uuid))
+      goto fail;
 
   success:
    unmap_image(&msli);
-   unmap_image(&dsli);
    return True;
 
    /* NOTREACHED */
@@ -1183,7 +1294,423 @@ Bool ML_(read_macho_debug_info)( struct _DebugInfo* di )
   fail:
    ML_(symerr)(di, True, "Error reading Mach-O object.");
    unmap_image(&msli);
-   unmap_image(&dsli);
+   return False;
+}
+
+/*--------------------------------------------------------------------*/
+/*--- dyld shared cache stuffs                                     ---*/
+/*--------------------------------------------------------------------*/
+
+struct dyld_cache_header
+{
+	char		magic[16];				// e.g. "dyld_v0    i386"
+	uint32_t	mappingOffset;			// file offset to first dyld_cache_mapping_info
+	uint32_t	mappingCount;			// number of dyld_cache_mapping_info entries
+	uint32_t	imagesOffset;			// file offset to first dyld_cache_image_info
+	uint32_t	imagesCount;			// number of dyld_cache_image_info entries
+	uint64_t	dyldBaseAddress;		// base address of dyld when cache was built
+	uint64_t	codeSignatureOffset;	// file offset of code signature blob
+	uint64_t	codeSignatureSize;		// size of code signature blob (zero means to end of file)
+	uint64_t	slideInfoOffset;		// file offset of kernel slid info
+	uint64_t	slideInfoSize;			// size of kernel slid info
+	uint64_t	localSymbolsOffset;		// file offset of where local symbols are stored
+	uint64_t	localSymbolsSize;		// size of local symbols information
+	uint8_t		uuid[16];				// unique value for each shared cache file
+};
+
+struct dyld_cache_mapping_info {
+	uint64_t	address;
+	uint64_t	size;
+	uint64_t	fileOffset;
+	uint32_t	maxProt;
+	uint32_t	initProt;
+};
+
+struct dyld_cache_image_info
+{
+	uint64_t	address;
+	uint64_t	modTime;
+	uint64_t	inode;
+	uint32_t	pathFileOffset;
+	uint32_t	pad;
+};
+
+struct dyld_cache_slide_info
+{
+	uint32_t	version;		// currently 1
+	uint32_t	toc_offset;
+	uint32_t	toc_count;
+	uint32_t	entries_offset;
+	uint32_t	entries_count;
+	uint32_t	entries_size;  // currently 128 
+	// uint16_t toc[toc_count];
+	// entrybitmap entries[entries_count];
+};
+
+
+struct dyld_cache_local_symbols_info
+{
+	uint32_t	nlistOffset;		// offset into this chunk of nlist entries
+	uint32_t	nlistCount;			// count of nlist entries
+	uint32_t	stringsOffset;		// offset into this chunk of string pool
+	uint32_t	stringsSize;		// byte count of string pool
+	uint32_t	entriesOffset;		// offset into this chunk of array of dyld_cache_local_symbols_entry 
+	uint32_t	entriesCount;		// number of elements in dyld_cache_local_symbols_entry array
+};
+
+struct dyld_cache_local_symbols_entry
+{
+	uint32_t	dylibOffset;		// offset in cache file of start of dylib
+	uint32_t	nlistStartIndex;	// start index of locals for this dylib
+	uint32_t	nlistCount;			// number of local symbols for this dylib
+};
+
+struct dyld_cache_image_desc
+{
+   Addr     mach_header;
+   Addr     text_vma;
+   SizeT    text_size;
+   OffT     text_off;
+   Addr     data_vma;
+   SizeT    data_size;
+   DiOffT   localNlists_off;
+   DiOffT   localStrings_off;
+   UInt     localNlistCount;
+};
+
+static Bool dyld_cache_initialized;
+
+static HChar dyld_cache_path[MAXPATHLEN];
+static Addr dyld_cache_start;
+static Long dyld_cache_slide;
+
+static struct dyld_cache_image_desc *dyld_cache_images;
+static UInt dyld_cache_image_count;
+
+#define MACOSX_DYLD_SHARED_CACHE_DIR	"/var/db/dyld/"
+#define IPHONE_DYLD_SHARED_CACHE_DIR	"/System/Library/Caches/com.apple.dyld/"
+#define DYLD_SHARED_CACHE_BASE_NAME		"dyld_shared_cache_"
+#define DYLD_CACHE_MAGIC               "dyld_v1"
+#define DYLD_CACHE_MAGIC_LEN           7
+
+static Bool parse_dyld_cache_image(Addr mach_header, Addr mapped_cache,
+                              struct dyld_cache_image_desc *image)
+{
+   struct MACH_HEADER *mh = (struct MACH_HEADER *)mach_header;
+   struct dyld_cache_header *dcacheheader = (struct dyld_cache_header *)mapped_cache;
+   struct load_command *cmd;
+   int c;
+   Bool text_present = False;
+   Bool data_present = False;
+   
+   image->mach_header = mach_header;
+   for (c = 0, cmd = (struct load_command *)((uint8_t *)mh + sizeof(struct MACH_HEADER));
+   c < mh->ncmds; c++, cmd = (struct load_command *)(cmd->cmdsize + (unsigned long)cmd))
+   {
+      switch (cmd->cmd) {
+         case LC_SEGMENT:
+         {
+            struct SEGMENT_COMMAND *segcmd = (struct SEGMENT_COMMAND *)cmd;
+            /* Try for __TEXT */
+            if (!text_present
+                && 0 == VG_(strcmp)(&(segcmd->segname[0]), "__TEXT")
+                && segcmd->filesize != 0) {
+               text_present = True;
+               image->text_vma = (Addr)segcmd->vmaddr;
+               image->text_size = segcmd->vmsize;
+            }
+            /* Try for __DATA */
+            if (!data_present
+                && 0 == VG_(strcmp)(&(segcmd->segname[0]), "__DATA")
+                && segcmd->filesize != 0) {
+               data_present = True;
+               image->data_vma = (Addr)segcmd->vmaddr;
+               image->data_size = segcmd->vmsize;
+            }
+            // Record the text segment offset
+            if (VG_(strcmp)(segcmd->segname, "__TEXT") == 0) {
+               image->text_off = segcmd->fileoff;
+               if(image->text_off == 0) {
+                  image->text_off = (OffT)((Addr)mh - (Addr)dcacheheader);
+               }
+            }
+            break;
+         }
+      }
+   }
+   
+   if(text_present) {
+      return True;
+   }
+   
+   return False;
+}
+
+Bool ML_(init_dyld_shared_cache_desc)( )
+{
+   SysRes res;
+   uint64_t mapped_cache = 0;
+   
+	res = VG_(do_syscall1)(__NR_shared_region_check_np, (UWord)(&mapped_cache));
+
+	if ((sr_isError(res)) || (sr_Res(res) != 0)) {
+      dyld_cache_initialized = False;
+      return False;
+   }
+   
+   // Make sure it's valid dyld cache
+   struct dyld_cache_header *pheader = (struct dyld_cache_header *)mapped_cache;
+   
+   if ((pheader->magic[15] != 0) || (VG_(memcmp)(pheader->magic, 
+         DYLD_CACHE_MAGIC, DYLD_CACHE_MAGIC_LEN) != 0)) {
+      VG_(message)(Vg_DebugMsg, "invalid dyld cache\n");
+      dyld_cache_initialized = False;
+      return False;
+   }
+
+   // ZD: fixme check vaild arch
+   HChar *arch_name = NULL;
+   for(Int i = 14; i >= DYLD_CACHE_MAGIC_LEN; i--) {
+      if(pheader->magic[i] == ' ') {
+         arch_name = (HChar *)(&(pheader->magic[i+1]));
+         break;
+      }
+   }
+   
+   if (!arch_name) {
+      VG_(message)(Vg_DebugMsg, "invalid dyld cache arch\n");
+      dyld_cache_initialized = False;
+      return False;
+   }
+   
+   // Cache seems to be valid. Fill in information of dyld
+   // shared cache
+   
+   dyld_cache_start = (Addr)mapped_cache;
+   
+#if defined(VGA_arm)
+   VG_(sprintf)(dyld_cache_path, "%s%s%s", IPHONE_DYLD_SHARED_CACHE_DIR, 
+      DYLD_SHARED_CACHE_BASE_NAME, arch_name);
+#else
+   VG_(sprintf)(dyld_cache_path, "%s%s%s", MACOSX_DYLD_SHARED_CACHE_DIR, 
+      DYLD_SHARED_CACHE_BASE_NAME, arch_name);
+#endif
+      
+   struct dyld_cache_mapping_info *mappings = 
+         (struct dyld_cache_mapping_info *)(dyld_cache_start + 
+            pheader->mappingOffset);
+   dyld_cache_slide = dyld_cache_start - mappings[0].address;
+   
+   struct dyld_cache_image_info *pimageinfo = 
+      (struct dyld_cache_image_info *)(dyld_cache_start + 
+                                       pheader->imagesOffset);
+   dyld_cache_images = ML_(dinfo_zalloc)("di.readmacho.dyldcache", 
+      sizeof(struct dyld_cache_image_desc) * pheader->imagesCount);
+   dyld_cache_image_count = 0;
+   
+   for (uint32_t i = 0; i < pheader->imagesCount; i++) {
+      Addr mh = dyld_cache_start + 
+         (pimageinfo[i].address - mappings[0].address);
+      
+      if (parse_dyld_cache_image(mh, dyld_cache_start, 
+            &dyld_cache_images[dyld_cache_image_count])) {
+         dyld_cache_image_count ++;
+      }
+   }
+   
+   //TODO:fill in localNlists_off.
+   //Don't worry about this now as we need to load them from the disk
+   //Local symbols are not mapped into the memory
+   
+   dyld_cache_initialized = True;
+   
+   return True;
+}
+
+#undef MACOSX_DYLD_SHARED_CACHE_DIR
+#undef IPHONE_DYLD_SHARED_CACHE_DIR
+#undef DYLD_SHARED_CACHE_BASE_NAME
+#undef DYLD_CACHE_MAGIC
+#undef DYLD_CACHE_MAGIC_LEN
+
+Bool ML_(read_dyld_shared_cache_image_debug_info)( struct _DebugInfo* di, 
+                  Addr mach_header, Addr mapped_cache, PtrdiffT slide )
+{
+   struct load_command *cmd;
+   struct symtab_command *symtab = NULL;
+   struct dysymtab_command *dysymtab = NULL;
+   uint32_t textOffsetInCache;
+   int c;
+   Word i;
+   Bool have_uuid = False;
+   UChar uuid[16];
+
+   struct MACH_HEADER *mh = (struct MACH_HEADER *)mach_header;
+   struct dyld_cache_header *dcacheheader = (struct dyld_cache_header *)mapped_cache;
+
+   di->text_bias = 0;
+   
+   for (c = 0, cmd = (struct load_command *)((uint8_t *)mh + sizeof(struct MACH_HEADER));
+   c < mh->ncmds; c++, cmd = (struct load_command *)(cmd->cmdsize + (unsigned long)cmd))
+   {
+      switch (cmd->cmd) {
+         case LC_ID_DYLIB:
+            if(mh->filetype == MH_DYLIB) {
+               struct dylib_command *dcmd = (struct dylib_command *)cmd;
+               HChar* dylibname = (HChar *)dcmd + dcmd->dylib.name.offset;
+               HChar* soname = VG_(strrchr)(dylibname, '/');
+               if (!soname) soname = dylibname;
+               else soname++;
+               di->soname = ML_(dinfo_strdup)("di.readdcache.dylibname",
+                                           soname);
+            }
+            break;
+         case LC_ID_DYLINKER:
+               if(mh->filetype == MH_DYLINKER) {
+                  struct dylinker_command *dcmd = (struct dylinker_command *)cmd;
+                  HChar* dylinkername = (HChar *)dcmd + dcmd->name.offset;
+                  HChar* soname = VG_(strrchr)(dylinkername, '/');
+                  if (!soname) soname = dylinkername;
+                  else soname++;
+                  di->soname = ML_(dinfo_strdup)("di.readdcache.dylinkername",
+                                              soname);
+               }
+               break;
+         case LC_SEGMENT:
+         {
+            struct SEGMENT_COMMAND *segcmd = (struct SEGMENT_COMMAND *)cmd;
+            /* Try for __TEXT */
+            if (!di->text_present
+                && 0 == VG_(strcmp)(&(segcmd->segname[0]), "__TEXT")
+                && segcmd->filesize != 0) {
+               di->text_present = True;
+               di->text_svma = (Addr)segcmd->vmaddr;
+               di->text_avma = di->text_svma + slide;
+               di->text_size = segcmd->vmsize;
+               di->text_bias = slide;
+               /* Make the _debug_ values be the same as the
+                  svma/bias for the primary object, since there is
+                  no secondary (debuginfo) object, but nevertheless
+                  downstream biasing of Dwarf3 relies on the
+                  _debug_ values. */
+               di->text_debug_svma = di->text_svma;
+               di->text_debug_bias = di->text_bias;
+            }
+            /* Try for __DATA */
+            if (!di->data_present
+                && 0 == VG_(strcmp)(&(segcmd->segname[0]), "__DATA")
+                && segcmd->filesize != 0) {
+               di->data_present = True;
+               di->data_svma = (Addr)segcmd->vmaddr;
+               di->data_avma = di->data_svma + slide;
+               di->data_size = segcmd->vmsize;
+               di->data_bias = slide;
+               di->data_debug_svma = di->data_svma;
+               di->data_debug_bias = di->data_bias;
+            }
+            // Record the text segment offset
+            if (VG_(strcmp)(segcmd->segname, "__TEXT") == 0) {
+               textOffsetInCache = segcmd->fileoff;
+               if(textOffsetInCache == 0) {
+                  textOffsetInCache = (uint32_t)((Addr)mh - (Addr)dcacheheader);
+               }
+            }
+            break;
+         }
+         case LC_SYMTAB:
+            symtab = (struct symtab_command *)cmd;
+            break;
+         case LC_DYSYMTAB:
+            dysymtab = (struct dysymtab_command *)cmd;
+            break;
+         case LC_UUID:
+         {
+            struct uuid_command *uuidcmd = (struct uuid_command *)cmd;
+            VG_(memcpy)(uuid, uuidcmd->uuid, sizeof(uuid));
+            have_uuid = True;
+            break;
+         }
+         default:
+            break;
+      }
+   }
+   
+   if (!di->soname) {
+      di->soname = ML_(dinfo_strdup)("di.readdcache.noname", "NONE");
+   }
+
+   if (di->trace_symtab) {
+      VG_(printf)("\n");
+      VG_(printf)("SONAME = %s\n", di->soname);
+      VG_(printf)("\n");
+   }
+   
+   //TODO: Read local symbols from disk
+   if (symtab) {
+      /* Read nlist symbol table */
+      XArray* /* DiSym */ candSyms = NULL;
+      Word nCandSyms;
+      
+      if (VG_(clo_verbosity) > 1)
+         VG_(message)(Vg_DebugMsg,
+            "   reading syms   from primary file (%d)\n",
+            symtab->nsyms);
+
+      /* Read candidate symbols into 'candSyms', so we can truncate
+         overlapping ends and generally tidy up, before presenting
+         them to ML_(addSym). */
+      candSyms = VG_(newXA)(
+                    ML_(dinfo_zalloc), "di.readdcache.candsyms.1",
+                    ML_(dinfo_free), sizeof(DiSym)
+                 );
+
+      // extern symbols
+      read_symtab_memory(candSyms,
+                  di,
+                  mapped_cache + symtab->symoff,
+                  symtab->nsyms,
+                  mapped_cache + symtab->stroff);
+
+      /* tidy up the cand syms -- trim overlapping ends.  May resize
+         candSyms. */
+      tidy_up_cand_syms( candSyms, di->trace_symtab );
+
+      /* and finally present them to ML_(addSym) */
+      nCandSyms = VG_(sizeXA)( candSyms );
+      for (i = 0; i < nCandSyms; i++) {
+         DiSym* cand = (DiSym*) VG_(indexXA)( candSyms, i );
+         vg_assert(cand->pri_name != NULL);
+         vg_assert(cand->sec_names == NULL);
+         if (di->trace_symtab)
+            VG_(printf)("nlist final: acquire  avma %010lx-%010lx  %s\n",
+                        cand->addr, cand->addr + cand->size - 1,
+                        cand->pri_name );
+         ML_(addSym)( di, cand );
+      }
+      VG_(deleteXA)( candSyms );
+   }
+   
+   /* If there's no UUID in the primary, don't even bother to try and
+    read any DWARF, since we won't be able to verify it matches.
+    Our policy is not to load debug info unless we can verify that
+    it matches the primary.  Just declare success at this point.
+    And don't complain to the user, since that would cause us to
+    complain on objects compiled without -g.  (Some versions of
+    XCode are observed to omit a UUID entry for object linked(?)
+    without -g.  Others don't appear to omit it.) */
+   if (!have_uuid)
+      goto success;
+
+   if(!read_dwarf_info(di, uuid))
+      goto fail;
+
+success:
+   return True;
+
+    /* NOTREACHED */
+
+fail:
+   ML_(symerr)(di, True, "Error reading dyld shared cache.");
    return False;
 }
 

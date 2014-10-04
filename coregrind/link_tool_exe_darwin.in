@@ -77,6 +77,7 @@ use Math::BigInt;
 # User configurable constants: how far before the exe should we
 # place the stack?
 my $TX_STACK_OFFSET_BEFORE_TEXT = 64 * 1024 * 1024;
+my $TX_STACK_OFFSET_BEFORE_TEXT_ON_ARM = 1 * 1024 * 1024;
 
 # and how big should the stack be?
 my $TX_STACK_SIZE = 8 * 1024 * 1024;
@@ -150,11 +151,23 @@ if ("$cc" =~ /clang$/) {
 }
 
 $cmd = "$cmd -arch $archstr";
-$cmd = "$cmd -macosx_version_min 10.5";
+if (index("$archstr","arm") == 0) {
+   $cmd = "$cmd -ios_version_min 7.0";
+}
+else {
+   $cmd = "$cmd -macosx_version_min 10.5";
+}
 $cmd = "$cmd -o $outname";
 $cmd = "$cmd -u __start -e __start";
 
-my $stack_addr = Math::BigInt->new( $ala ) - $TX_STACK_OFFSET_BEFORE_TEXT;
+my $stack_addr = 0;
+
+if (index("$archstr","arm") == 0) {
+   $stack_addr = Math::BigInt->new( $ala ) - $TX_STACK_OFFSET_BEFORE_TEXT_ON_ARM;
+}
+else {
+   $stack_addr = Math::BigInt->new( $ala ) - $TX_STACK_OFFSET_BEFORE_TEXT;
+}
 my $stack_addr_str = $stack_addr->as_hex();
 my $stack_size_str = Math::BigInt::as_hex($TX_STACK_SIZE);
 

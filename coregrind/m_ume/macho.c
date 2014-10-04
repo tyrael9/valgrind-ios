@@ -189,9 +189,26 @@ load_segment(int fd, vki_off_t offset, vki_off_t size,
    // to map it when loading the client are guaranteed to fail.
 #if VG_WORDSIZE == 4
    if (segcmd->vmaddr == 0 && 0 == VG_(strcmp)(segcmd->segname, SEG_PAGEZERO)) {
-      if (segcmd->vmsize != 0x1000) {
-         print("bad executable (__PAGEZERO is not 4 KB)\n");
+      if (segcmd->vmsize < 0x1000) {
+         print("bad executable (__PAGEZERO is less than 4 KB)\n");
          return -1;
+      }
+      else if (segcmd->vmsize > 0x1000) {
+         print("__PAGEZERO is larger than 4 KB, mapping the difference\n");
+         
+         // sanity checks
+         vg_assert(segcmd->fileoff == 0);
+         vg_assert(segcmd->filesize == 0);
+         vg_assert(segcmd->initprot == VM_PROT_NONE);
+         vg_assert(segcmd->maxprot == VM_PROT_NONE);
+
+         SizeT length = VG_PGROUNDUP(segcmd->vmsize) - 0x1000;
+         addr = 0x1000;
+         prot = VM_PROT_NONE;
+         VG_(debugLog)(2, "ume", "mmap fixed (anon) (%#lx, %lu)\n", addr, length);
+         res = VG_(am_mmap_anon_fixed_client)(addr, length, prot);
+         check_mmap(res, addr, length, "load_pagezero");
+         return 0;
       }
       return 0;
    }
@@ -322,6 +339,20 @@ load_genericthread(vki_uint8_t **stack_end,
             (*stack_end)--;
          }
          if (customstack) *customstack = state->__rsp;
+         return 0;
+      }
+      
+#elif defined(VGA_arm)
+      if (flavor == ARM_THREAD_STATE && count == ARM_THREAD_STATE_COUNT){
+         arm_thread_state_t *state = (arm_thread_state_t *)p;
+         if (entry) *entry = (vki_uint8_t *)state->__pc;
+		 if (stack_end) {
+            *stack_end = (vki_uint8_t *)(state->__sp ? state->__sp 
+                                                      : VKI_USRSTACK);
+            vg_assert(VG_IS_PAGE_ALIGNED(*stack_end));
+            (*stack_end)--;
+         }
+         if (customstack) *customstack = state->__sp;
          return 0;
       }
 
@@ -705,6 +736,9 @@ load_fat_file(int fd, vki_off_t offset, vki_off_t size, unsigned long filetype,
    vki_off_t arch_offset;
    int i;
    cpu_type_t good_arch;
+#if defined(VGA_arm)
+   cpu_subtype_t highest_subtype;
+#endif
    SysRes res;
 
 #if defined(VGA_ppc32)
@@ -717,6 +751,9 @@ load_fat_file(int fd, vki_off_t offset, vki_off_t size, unsigned long filetype,
    good_arch = CPU_TYPE_I386;
 #elif defined(VGA_amd64)
    good_arch = CPU_TYPE_X86_64;
+#elif defined(VGA_arm)
+   good_arch = CPU_TYPE_ARM;
+   highest_subtype = CPU_SUBTYPE_ARM_V7;
 #else
 # error unknown architecture
 #endif
@@ -756,7 +793,12 @@ load_fat_file(int fd, vki_off_t offset, vki_off_t size, unsigned long filetype,
       arch.offset = VG_(ntohl)(arch.offset);
       arch.size = VG_(ntohl)(arch.size);
       arch.align = VG_(ntohl)(arch.align);
+
+#if defined(VGA_arm)
+      if ((arch.cputype == good_arch) && (arch.cpusubtype <= highest_subtype)) {
+#else
       if (arch.cputype == good_arch) {
+#endif
          // use this arch
          if (arch.offset > size  ||  arch.offset + arch.size > size) {
             print("bad executable (corrupt fat arch 2)\n");

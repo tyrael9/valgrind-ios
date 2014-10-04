@@ -1751,6 +1751,10 @@ void ML_(read_debuginfo_dwarf1) (
 #  define FP_REG         6
 #  define SP_REG         7
 #  define RA_REG_DEFAULT 16
+#elif defined(VGP_arm_darwin)
+#  define FP_REG         7
+#  define SP_REG         13
+#  define RA_REG_DEFAULT 14
 #elif defined(VGP_s390x_linux)
 #  define FP_REG         11    // sometimes s390 has a frame pointer in r11
 #  define SP_REG         15    // stack is always r15
