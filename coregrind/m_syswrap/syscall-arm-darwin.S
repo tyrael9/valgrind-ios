@@ -111,7 +111,7 @@
 
     mov r4, r0      //r4 = syscall number
     mov r10, r1     //r10 = guest_state
-    mov r11, r2      //r11 = sysmask
+    mov r11, r3      //r11 = postmask
 
 L_$0_1:	/* Even though we can't take a signal until the sigprocmask completes,
 	   start the range early.
@@ -119,8 +119,8 @@ L_$0_1:	/* Even though we can't take a signal until the sigprocmask completes,
 
 	mov r12, # VG_DARWIN_SYSNO_FOR_KERNEL_UNIX(__NR___pthread_sigmask)
     mov r0, #VKI_SIG_SETMASK
-    mov r1, r11 /* sysmask */
-    mov r2, r3 /* postmask */
+    mov r1, r2 /* sysmask */
+    mov r2, r11 /* postmask */
     svc #0x80
     bcs L_$0_7 /* __pthread_sigmask failed */
 	
@@ -184,8 +184,8 @@ L_$0_4:	/* Re-block signals.  If eip is in [4,5), then the syscall
 	   is complete and we needn't worry about it. */
 	mov r12, # VG_DARWIN_SYSNO_FOR_KERNEL_UNIX(__NR___pthread_sigmask)
     mov r0, #VKI_SIG_SETMASK
-    mov r1, r11 /* sysmask */
-    mov r2, #0  /* postmask */
+    mov r1, r11 /* postmask */
+    mov r2, #0  /* NULL */
     svc #0x80
     bcs L_$0_7 /* __pthread_sigmask failed */
 

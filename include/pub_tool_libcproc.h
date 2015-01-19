@@ -98,7 +98,6 @@ extern Int  VG_(gettimeofday)(struct vki_timeval *tv, struct vki_timezone *tz);
 typedef void (*vg_atfork_t)(ThreadId);
 extern void VG_(atfork)(vg_atfork_t pre, vg_atfork_t parent, vg_atfork_t child);
 
-
 #endif   // __PUB_TOOL_LIBCPROC_H
 
 /*--------------------------------------------------------------------*/

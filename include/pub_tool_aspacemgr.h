@@ -158,6 +158,12 @@ extern void* VG_(am_shadow_alloc)(SizeT size);
    accordingly.  This fails if the range isn't valid for valgrind. */
 extern SysRes VG_(am_munmap_valgrind)( Addr start, SizeT length );
 
+/* Map shared a file at an unconstrained address for V, and update the
+   segment array accordingly.  This is used to map shared regions
+   to communicate with other processes.  */
+extern SysRes VG_(am_shared_mmap_file_float_valgrind)
+   ( SizeT length, UInt prot, Int fd, Off64T offset );
+
 #endif   // __PUB_TOOL_ASPACEMGR_H
 
 /*--------------------------------------------------------------------*/

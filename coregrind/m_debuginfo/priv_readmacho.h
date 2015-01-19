@@ -35,6 +35,8 @@
 #include "pub_core_basics.h"     // SizeT
 #include "pub_core_debuginfo.h"  // DebugInfo
 
+typedef struct dyld_cache_image_desc *dyld_image_desc;
+
 /* Identify a Mach-O object file by peering at the first few bytes of
    it. */
 extern Bool ML_(is_macho_object_file)( const void* buf, SizeT size );
@@ -47,6 +49,15 @@ extern Bool ML_(is_macho_object_file)( const void* buf, SizeT size );
 */
 extern Bool ML_(read_macho_debug_info) ( DebugInfo* si );
 
+extern Bool ML_(init_dyld_shared_cache_desc)( void );
+
+extern Bool ML_(read_dyld_shared_cache_image_debug_info)(struct _DebugInfo* di, 
+   struct dyld_cache_image_desc* image_desc);
+   
+extern void ML_(set_debug_info_mapping)(struct _DebugInfo* di, 
+   struct dyld_cache_image_desc* image_desc);
+
+extern dyld_image_desc ML_(get_dyld_image_desc)( Addr a, Bool *has_read, HChar **filename );
 
 #endif /* ndef __PRIV_READMACHO_H */
 

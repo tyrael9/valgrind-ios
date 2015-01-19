@@ -2,3 +2,4 @@
 	path = VEX
 	url = /Users/tyrael/Desktop/valgrind-svn/VEX/trunk/
 	branch = ios
+	ignore = dirty

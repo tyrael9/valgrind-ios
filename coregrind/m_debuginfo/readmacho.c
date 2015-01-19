@@ -45,6 +45,7 @@
 #include "pub_core_oset.h"
 #include "pub_core_tooliface.h"    /* VG_(needs) */
 #include "pub_core_xarray.h"
+#include "pub_core_rangemap.h"
 #include "pub_core_clientstate.h"
 #include "pub_core_debuginfo.h"
 #include "pub_core_syscall.h"    // VG_(do_syscallN)
@@ -413,6 +414,10 @@ void read_symtab_memory( /*OUT*/XArray* /* DiSym */ syms,
       VG_(memcpy)(&nl, (void *)(symtab_cur + (i * sizeof(struct NLIST))), sizeof(nl));
 
       Addr sym_addr = 0;
+		if ( (nl.n_type & (N_TYPE|N_EXT)) == N_SECT ) {
+			continue;
+      }
+      
       if ((nl.n_type & N_TYPE) == N_SECT) {
          sym_addr = di->text_bias + nl.n_value;
       /*} else if ((nl.n_type & N_TYPE) == N_ABS) {
@@ -796,7 +801,6 @@ Bool static read_dwarf_info( struct _DebugInfo *di, UChar *uuid )
 {
    HChar*   dsymfilename = NULL;
    DiSlice  dsli         = DiSlice_INVALID; // the debuginfo image
-   DiSlice debug_info_mscn;
    
     /* mmap the dSYM file to look for DWARF debug info.  If successful,
        use the .macho_img and .macho_img_szB in dsli. */
@@ -933,7 +937,7 @@ Bool static read_dwarf_info( struct _DebugInfo *di, UChar *uuid )
          svma and the text bias, and that sounds reasonable. */
       Addr eh_frame_svma = 0;
       DiSlice eh_frame_mscn
-         = getsectdata(msli, "__TEXT", "__eh_frame", &eh_frame_svma);
+         = getsectdata(dsli, "__TEXT", "__eh_frame", &eh_frame_svma);
 
       if (ML_(sli_is_valid)(eh_frame_mscn)) {
          vg_assert(di->text_bias == di->text_debug_bias);
@@ -1368,6 +1372,7 @@ struct dyld_cache_local_symbols_entry
 struct dyld_cache_image_desc
 {
    Addr     mach_header;
+   HChar*   name;
    Addr     text_vma;
    SizeT    text_size;
    OffT     text_off;
@@ -1376,6 +1381,7 @@ struct dyld_cache_image_desc
    DiOffT   localNlists_off;
    DiOffT   localStrings_off;
    UInt     localNlistCount;
+   Bool     has_read;
 };
 
 static Bool dyld_cache_initialized;
@@ -1387,11 +1393,29 @@ static Long dyld_cache_slide;
 static struct dyld_cache_image_desc *dyld_cache_images;
 static UInt dyld_cache_image_count;
 
+static RangeMap* dyld_cache_rangemap;
+
 #define MACOSX_DYLD_SHARED_CACHE_DIR	"/var/db/dyld/"
 #define IPHONE_DYLD_SHARED_CACHE_DIR	"/System/Library/Caches/com.apple.dyld/"
 #define DYLD_SHARED_CACHE_BASE_NAME		"dyld_shared_cache_"
 #define DYLD_CACHE_MAGIC               "dyld_v1"
 #define DYLD_CACHE_MAGIC_LEN           7
+
+static Addr dyld_shared_cache_fileoff_to_addr(ULong fileoff) {
+   struct dyld_cache_header *pheader = (struct dyld_cache_header *)dyld_cache_start;
+      
+   struct dyld_cache_mapping_info *mappings = 
+         (struct dyld_cache_mapping_info *)(dyld_cache_start + 
+            pheader->mappingOffset);
+   
+   for (int i = 0; i < pheader->mappingCount; ++i) {
+      if ((fileoff >= mappings[i].fileOffset) && (fileoff < mappings[i].fileOffset + mappings[i].size)) {
+         return mappings[i].address + (fileoff - mappings[i].fileOffset) + dyld_cache_slide;
+      }
+   }
+   
+   return (Addr)NULL;
+}
 
 static Bool parse_dyld_cache_image(Addr mach_header, Addr mapped_cache,
                               struct dyld_cache_image_desc *image)
@@ -1408,23 +1432,29 @@ static Bool parse_dyld_cache_image(Addr mach_header, Addr mapped_cache,
    c < mh->ncmds; c++, cmd = (struct load_command *)(cmd->cmdsize + (unsigned long)cmd))
    {
       switch (cmd->cmd) {
+         case LC_ID_DYLIB:
+         {
+            struct dylib_command *dcmd = (struct dylib_command *)cmd;
+            image->name = (HChar *)cmd + dcmd->dylib.name.offset;
+            break;
+         }
          case LC_SEGMENT:
          {
             struct SEGMENT_COMMAND *segcmd = (struct SEGMENT_COMMAND *)cmd;
             /* Try for __TEXT */
             if (!text_present
                 && 0 == VG_(strcmp)(&(segcmd->segname[0]), "__TEXT")
-                && segcmd->filesize != 0) {
+                && segcmd->filesize != 0 && segcmd->vmsize != 0) {
                text_present = True;
-               image->text_vma = (Addr)segcmd->vmaddr;
+               image->text_vma = (Addr)segcmd->vmaddr + dyld_cache_slide;
                image->text_size = segcmd->vmsize;
             }
             /* Try for __DATA */
             if (!data_present
                 && 0 == VG_(strcmp)(&(segcmd->segname[0]), "__DATA")
-                && segcmd->filesize != 0) {
+                && segcmd->filesize != 0 && segcmd->vmsize != 0) {
                data_present = True;
-               image->data_vma = (Addr)segcmd->vmaddr;
+               image->data_vma = (Addr)segcmd->vmaddr + dyld_cache_slide;
                image->data_size = segcmd->vmsize;
             }
             // Record the text segment offset
@@ -1508,12 +1538,43 @@ Bool ML_(init_dyld_shared_cache_desc)( )
       sizeof(struct dyld_cache_image_desc) * pheader->imagesCount);
    dyld_cache_image_count = 0;
    
+   dyld_cache_rangemap = VG_(newRangeMap)(ML_(dinfo_zalloc), "di.readmacho.dyldcache.textrangemap", ML_(dinfo_free), (UWord)NULL);
+   
    for (uint32_t i = 0; i < pheader->imagesCount; i++) {
       Addr mh = dyld_cache_start + 
          (pimageinfo[i].address - mappings[0].address);
       
       if (parse_dyld_cache_image(mh, dyld_cache_start, 
             &dyld_cache_images[dyld_cache_image_count])) {
+         struct dyld_cache_image_desc *pimagedesc = &dyld_cache_images[dyld_cache_image_count];
+         UWord key_min, key_max, val;
+         if ((pimagedesc->text_vma) && (pimagedesc->text_size)) {
+            VG_(lookupRangeMap)(&key_min, &key_max, &val, dyld_cache_rangemap, pimagedesc->text_vma);
+            if (val != (UWord)NULL) {
+               continue;
+            }
+            VG_(lookupRangeMap)(&key_min, &key_max, &val, dyld_cache_rangemap, pimagedesc->text_vma + pimagedesc->text_size - 1);
+            if (val != (UWord)NULL) {
+               continue;
+            }
+         }
+         if ((pimagedesc->data_vma) && (pimagedesc->data_size)) {
+            VG_(lookupRangeMap)(&key_min, &key_max, &val, dyld_cache_rangemap, pimagedesc->data_vma);
+            if (val != (UWord)NULL) {
+               continue;
+            }
+            VG_(lookupRangeMap)(&key_min, &key_max, &val, dyld_cache_rangemap, pimagedesc->data_vma + pimagedesc->data_size - 1);
+            if (val != (UWord)NULL) {
+               continue;
+            }
+         }
+         if ((pimagedesc->text_vma) && (pimagedesc->text_size)) {
+            VG_(bindRangeMap)(dyld_cache_rangemap, pimagedesc->text_vma, pimagedesc->text_vma + pimagedesc->text_size - 1, (UWord)pimagedesc);
+         }
+         if ((pimagedesc->data_vma) && (pimagedesc->data_size)) {
+            VG_(bindRangeMap)(dyld_cache_rangemap, pimagedesc->data_vma, pimagedesc->data_vma + pimagedesc->data_size - 1, (UWord)pimagedesc);
+         }
+         pimagedesc->has_read = False;
          dyld_cache_image_count ++;
       }
    }
@@ -1533,8 +1594,8 @@ Bool ML_(init_dyld_shared_cache_desc)( )
 #undef DYLD_CACHE_MAGIC
 #undef DYLD_CACHE_MAGIC_LEN
 
-Bool ML_(read_dyld_shared_cache_image_debug_info)( struct _DebugInfo* di, 
-                  Addr mach_header, Addr mapped_cache, PtrdiffT slide )
+Bool ML_(read_dyld_shared_cache_image_debug_info)(struct _DebugInfo* di, 
+   struct dyld_cache_image_desc* image_desc)
 {
    struct load_command *cmd;
    struct symtab_command *symtab = NULL;
@@ -1544,9 +1605,13 @@ Bool ML_(read_dyld_shared_cache_image_debug_info)( struct _DebugInfo* di,
    Word i;
    Bool have_uuid = False;
    UChar uuid[16];
+   PtrdiffT slide = dyld_cache_slide;
+   
+   vg_assert(image_desc);
+   vg_assert(!(image_desc->has_read));
 
-   struct MACH_HEADER *mh = (struct MACH_HEADER *)mach_header;
-   struct dyld_cache_header *dcacheheader = (struct dyld_cache_header *)mapped_cache;
+   struct MACH_HEADER *mh = (struct MACH_HEADER *)(image_desc->mach_header);
+   struct dyld_cache_header *dcacheheader = (struct dyld_cache_header *)dyld_cache_start;
 
    di->text_bias = 0;
    
@@ -1664,30 +1729,40 @@ Bool ML_(read_dyld_shared_cache_image_debug_info)( struct _DebugInfo* di,
                     ML_(dinfo_free), sizeof(DiSym)
                  );
 
-      // extern symbols
-      read_symtab_memory(candSyms,
-                  di,
-                  mapped_cache + symtab->symoff,
-                  symtab->nsyms,
-                  mapped_cache + symtab->stroff);
+      Addr symoff_addr = dyld_shared_cache_fileoff_to_addr(symtab->symoff);
+      Addr stroff_addr = dyld_shared_cache_fileoff_to_addr(symtab->stroff);
 
-      /* tidy up the cand syms -- trim overlapping ends.  May resize
-         candSyms. */
-      tidy_up_cand_syms( candSyms, di->trace_symtab );
+      if ((symoff_addr) && (stroff_addr)) {
+         // extern symbols
+         read_symtab_memory(candSyms,
+                     di,
+                     symoff_addr,
+                     symtab->nsyms,
+                     stroff_addr);
 
-      /* and finally present them to ML_(addSym) */
-      nCandSyms = VG_(sizeXA)( candSyms );
-      for (i = 0; i < nCandSyms; i++) {
-         DiSym* cand = (DiSym*) VG_(indexXA)( candSyms, i );
-         vg_assert(cand->pri_name != NULL);
-         vg_assert(cand->sec_names == NULL);
-         if (di->trace_symtab)
-            VG_(printf)("nlist final: acquire  avma %010lx-%010lx  %s\n",
-                        cand->avmas.main, cand->avmas.main + cand->size - 1,
-                        cand->pri_name );
-         ML_(addSym)( di, cand );
+         /* tidy up the cand syms -- trim overlapping ends.  May resize
+            candSyms. */
+         tidy_up_cand_syms( candSyms, di->trace_symtab );
+
+         /* and finally present them to ML_(addSym) */
+         nCandSyms = VG_(sizeXA)( candSyms );
+         for (i = 0; i < nCandSyms; i++) {
+            DiSym* cand = (DiSym*) VG_(indexXA)( candSyms, i );
+            vg_assert(cand->pri_name != NULL);
+            vg_assert(cand->sec_names == NULL);
+            if (di->trace_symtab)
+               VG_(printf)("nlist final: acquire  avma %010lx-%010lx  %s\n",
+                           cand->avmas.main, cand->avmas.main + cand->size - 1,
+                           cand->pri_name );
+            ML_(addSym)( di, cand );
+         }
+         VG_(deleteXA)( candSyms );
+      } else {
+         if (di->trace_symtab) {
+            VG_(printf)("Failed to get symtab and strtab address using file offset\n");
+         }
+         goto fail;
       }
-      VG_(deleteXA)( candSyms );
    }
    
    /* If there's no UUID in the primary, don't even bother to try and
@@ -1705,6 +1780,7 @@ Bool ML_(read_dyld_shared_cache_image_debug_info)( struct _DebugInfo* di,
       goto fail;
 
 success:
+   image_desc->has_read = True;
    return True;
 
     /* NOTREACHED */
@@ -1712,6 +1788,41 @@ success:
 fail:
    ML_(symerr)(di, True, "Error reading dyld shared cache.");
    return False;
+}
+
+void ML_(set_debug_info_mapping)(struct _DebugInfo* di, struct dyld_cache_image_desc* image_desc) {
+   DebugInfoMapping map;
+   
+   map.avma = image_desc->text_vma;
+   map.size = image_desc->text_size;
+   map.foff = 0; /* we don't care */
+   map.rx   = True;
+   map.rw   = False;
+   map.ro   = False;
+   VG_(addToXA)(di->fsm.maps, &map);
+   di->fsm.have_rx_map = True;
+
+   map.avma = image_desc->data_vma;
+   map.size = image_desc->data_size;
+   map.foff = 0; /* we don't care */
+   map.rx   = False;
+   map.rw   = True;
+   map.ro   = False;
+   VG_(addToXA)(di->fsm.maps, &map);
+   di->fsm.have_rw_map = True;
+}
+
+dyld_image_desc ML_(get_dyld_image_desc)( Addr a, Bool *has_read, HChar **filename )
+{
+   UWord key_min, key_max, val;
+   VG_(lookupRangeMap)(&key_min, &key_max, &val, dyld_cache_rangemap, (UWord)a);
+   if (val) {
+      struct dyld_cache_image_desc *pimagedesc = (struct dyld_cache_image_desc *)val;
+      *has_read = pimagedesc->has_read;
+      *filename = pimagedesc->name;
+      return pimagedesc;
+   }
+   return NULL;
 }
 
 #endif // defined(VGO_darwin)

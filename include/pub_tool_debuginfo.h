@@ -264,6 +264,8 @@ const HChar* VG_(pp_SectKind)( VgSectKind kind );
    into *name. The returned name is persistent as long as the debuginfo
    it belongs to isn't discarded. */
 VgSectKind VG_(DebugInfo_sect_kind)( /*OUT*/const HChar** name, Addr a);
+                                     
+void VG_(update_DebugInfo_at_address)(Addr a);
 
 
 #endif   // __PUB_TOOL_DEBUGINFO_H

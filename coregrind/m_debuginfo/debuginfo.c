@@ -588,6 +588,12 @@ void VG_(di_initialise) ( void )
 
    /* flush the CFI fast query cache. */
    cfsi_m_cache__invalidate();
+   
+#if defined(VGP_arm_darwin)
+   if(!ML_(init_dyld_shared_cache_desc)()) {
+      VG_(message)(Vg_UserMsg, "Warning: failed to load dyld shared cache info\n");
+   }
+#endif
 }
 
 
@@ -719,7 +725,8 @@ static void truncate_DebugInfoMapping_overlaps
    in.  Returns a ULong whose purpose is described in comments 
    preceding VG_(di_notify_mmap) just below.
 */
-static ULong di_notify_ACHIEVE_ACCEPT_STATE ( struct _DebugInfo* di )
+static ULong di_notify_ACHIEVE_ACCEPT_STATE ( struct _DebugInfo* di, 
+   dyld_image_desc image_desc)
 {
    ULong di_handle;
    Bool  ok;
@@ -748,7 +755,15 @@ static ULong di_notify_ACHIEVE_ACCEPT_STATE ( struct _DebugInfo* di )
 #  if defined(VGO_linux)
    ok = ML_(read_elf_debug_info)( di );
 #  elif defined(VGO_darwin)
+#     if defined(VGA_arm)
+   if (image_desc) {
+      ok = ML_(read_dyld_shared_cache_image_debug_info)( di, image_desc );
+   } else {
+      ok = ML_(read_macho_debug_info)( di );
+   }
+#     else
    ok = ML_(read_macho_debug_info)( di );
+#     endif
 #  else
 #    error "unknown OS"
 #  endif
@@ -1059,7 +1074,7 @@ ULong VG_(di_notify_mmap)( Addr a, Bool allow_SkFileV, Int use_fd )
       if (debug)
          VG_(printf)("di_notify_mmap-5: "
                      "achieved accept state for %s\n", filename);
-      return di_notify_ACHIEVE_ACCEPT_STATE ( di );
+      return di_notify_ACHIEVE_ACCEPT_STATE ( di, NULL );
    } else {
       /* If we don't have an rx and rw mapping, or if we already have
          debuginfo for this mapping for whatever reason, go no
@@ -1189,7 +1204,7 @@ void VG_(di_notify_vm_protect)( Addr a, SizeT len, UInt prot )
          VG_(printf)("di_notify_vm_protect-5: "
                      "achieved accept state for %s\n", di->fsm.filename);
       ULong di_handle __attribute__((unused))
-         = di_notify_ACHIEVE_ACCEPT_STATE( di );
+         = di_notify_ACHIEVE_ACCEPT_STATE( di, NULL );
       /* di_handle is ignored. That's not a problem per se -- it just
          means nobody will ever be able to refer to this debuginfo by
          handle since nobody will know what the handle value is. */
@@ -4397,6 +4412,28 @@ VgSectKind VG_(DebugInfo_sect_kind)( /*OUT*/const HChar** name, Addr a)
 
    return res;
 
+}
+
+void VG_(update_DebugInfo_at_address)(Addr a) {
+#if defined(VGP_arm_darwin)
+   Bool has_read;
+   HChar *filename;
+   DebugInfo* di;
+   dyld_image_desc imagedesc;
+   
+   imagedesc = ML_(get_dyld_image_desc)(a, &has_read, &filename);
+   if ((!imagedesc) || (has_read)) {
+      return;
+   }
+   
+   di = find_or_create_DebugInfo_for(filename);
+   vg_assert(di);
+   
+   ML_(set_debug_info_mapping)(di, imagedesc);
+
+   ULong di_handle __attribute__((unused))
+      = di_notify_ACHIEVE_ACCEPT_STATE( di, imagedesc );
+#endif
 }
 
 /*--------------------------------------------------------------------*/
