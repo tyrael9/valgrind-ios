@@ -59,6 +59,8 @@ extern void ML_(set_debug_info_mapping)(struct _DebugInfo* di,
 
 extern dyld_image_desc ML_(get_dyld_image_desc)( Addr a, Bool *has_read, HChar **filename );
 
+extern dyld_image_desc ML_(get_dyld_image_desc_by_name)( Bool *has_read, const HChar *filename );
+
 #endif /* ndef __PRIV_READMACHO_H */
 
 /*--------------------------------------------------------------------*/

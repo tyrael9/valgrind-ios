@@ -1391,7 +1391,7 @@ static Addr dyld_cache_start;
 static Long dyld_cache_slide;
 
 static struct dyld_cache_image_desc *dyld_cache_images;
-static UInt dyld_cache_image_count;
+static UInt dyld_cache_image_count = 0;
 
 static RangeMap* dyld_cache_rangemap;
 
@@ -1821,6 +1821,24 @@ dyld_image_desc ML_(get_dyld_image_desc)( Addr a, Bool *has_read, HChar **filena
       *has_read = pimagedesc->has_read;
       *filename = pimagedesc->name;
       return pimagedesc;
+   }
+   return NULL;
+}
+
+dyld_image_desc ML_(get_dyld_image_desc_by_name)( Bool *has_read, const HChar *filename )
+{
+   Int i = 0;
+   SizeT len = VG_(strlen)(filename);
+   for (i = 0; i < dyld_cache_image_count; ++i) {
+      struct dyld_cache_image_desc *pimagedesc = &dyld_cache_images[i];
+      SizeT len1 = VG_(strlen)(pimagedesc->name);
+      if (len1 < len) {
+         continue;
+      }
+      if (VG_(strcmp)(filename, pimagedesc->name + (len1 - len)) == 0) {
+         *has_read = pimagedesc->has_read;
+         return pimagedesc;
+      }
    }
    return NULL;
 }

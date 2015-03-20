@@ -110,6 +110,7 @@
 */
 #undef PLAT_x86_darwin
 #undef PLAT_amd64_darwin
+#undef PLAT_arm_darwin
 #undef PLAT_x86_win32
 #undef PLAT_amd64_win64
 #undef PLAT_x86_linux
@@ -129,6 +130,8 @@
 #  define PLAT_x86_darwin 1
 #elif defined(__APPLE__) && defined(__x86_64__)
 #  define PLAT_amd64_darwin 1
+#elif defined(__APPLE__) && defined(__arm__)
+#  define PLAT_arm_darwin 1
 #elif (defined(__MINGW32__) && !defined(__MINGW64__)) \
       || defined(__CYGWIN32__) \
       || (defined(_WIN32) && defined(_M_IX86))
@@ -683,9 +686,9 @@ typedef
 
 #endif /* PLAT_ppc64le_linux */
 
-/* ------------------------- arm-linux ------------------------- */
+/* ------------------------- arm-{linux,darwin} ---------------- */
 
-#if defined(PLAT_arm_linux)
+#if defined(PLAT_arm_linux) || defined(PLAT_arm_darwin)
 
 typedef
    struct { 
@@ -3799,9 +3802,9 @@ typedef
 
 #endif /* PLAT_ppc64le_linux */
 
-/* ------------------------- arm-linux ------------------------- */
+/* ------------------------- arm-{linux,darwin} ----------------- */
 
-#if defined(PLAT_arm_linux)
+#if defined(PLAT_arm_linux) || defined(PLAT_arm_darwin)
 
 /* These regs are trashed by the hidden call. */
 #define __CALLER_SAVED_REGS "r0", "r1", "r2", "r3","r4", "r12", "r14"
@@ -7096,6 +7099,7 @@ VALGRIND_PRINTF_BACKTRACE(const char *format, ...)
 
 #undef PLAT_x86_darwin
 #undef PLAT_amd64_darwin
+#undef PLAT_arm_darwin
 #undef PLAT_x86_win32
 #undef PLAT_amd64_win64
 #undef PLAT_x86_linux

@@ -713,7 +713,7 @@ POST(shared_region_map_and_slide_np)
    if (SUCCESS) {
       Int fd = ARG1;
       UInt count = ARG2;
-      struct shared_file_mapping_np *mappings = ARG3;
+      struct shared_file_mapping_np *mappings = (struct shared_file_mapping_np *)ARG3;
       UInt slide = ARG4;
       int i = 0;
       while (i < count) {
@@ -728,7 +728,7 @@ POST(shared_region_map_and_slide_np)
 
 PRE(proc_info)
 {
-   PRINT("proc_info ( %ld, %ld, %lld, %ld, %ld, %ld )", 
+   PRINT("proc_info ( %ld, %ld, %ld, %lld, %ld, %ld )", 
          ARG1, ARG2, ARG3, (((uint64_t)ARG4) | ((uint64_t)ARG5 << 32)), ARG6, ARG7);
          
    PRE_REG_READ7(int, "proc_info",

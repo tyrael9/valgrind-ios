@@ -38,12 +38,12 @@ AC_PROG_CXX
 # - put AC_PROG_OBJC in a Darwin-specific part of this file
 # - Use AC_PROG_OBJC here and up the minimum autoconf version
 # - Use the following, which is apparently equivalent:
-#     m4_ifdef([AC_PROG_OBJC],
-#        [AC_PROG_OBJC],
-#        [AC_CHECK_TOOL([OBJC], [gcc])
-#         AC_SUBST([OBJC])
-#         AC_SUBST([OBJCFLAGS])
-#        ])
+m4_ifdef([AC_PROG_OBJC],
+  [AC_PROG_OBJC],
+  [AC_CHECK_TOOL([OBJC], [gcc])
+   AC_SUBST([OBJC])
+   AC_SUBST([OBJCFLAGS])
+  ])
 AC_PROG_RANLIB
 # provide a very basic definition for AC_PROG_SED if it's not provided by
 # autoconf (as e.g. in autoconf 2.59).

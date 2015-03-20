@@ -1591,6 +1591,7 @@ InlIPCursor* VG_(new_IIPC)(Addr eip)
       return NULL; // No way we can find inlined calls.
 
    /* Search the DebugInfo for eip */
+   VG_(update_DebugInfo_at_address)(eip);
    search_all_loctabs ( eip, &di, &locno );
    if (di == NULL || di->inltab_used == 0)
       return NULL; // No di (with inltab) containing eip.
@@ -2244,6 +2245,8 @@ const HChar* VG_(describe_IP)(Addr eip, const InlIPCursor *iipc)
    Bool  know_objname;
    Bool  know_srcloc;
 
+   VG_(update_DebugInfo_at_address)(eip);
+   
    if (is_bottom(iipc)) {
       // At the bottom (towards main), we describe the fn at eip.
       know_fnname = VG_(clo_sym_offsets)
@@ -4433,6 +4436,68 @@ void VG_(update_DebugInfo_at_address)(Addr a) {
 
    ULong di_handle __attribute__((unused))
       = di_notify_ACHIEVE_ACCEPT_STATE( di, imagedesc );
+#endif
+}
+
+static inline Bool ends_with(const HChar *str, const HChar *suffix)
+{
+    if (!str || !suffix)
+        return False;
+    size_t lenstr = VG_(strlen)(str);
+    size_t lensuffix = VG_(strlen)(suffix);
+    if (lensuffix > lenstr)
+        return False;
+    return (VG_(strncmp)(str + lenstr - lensuffix, suffix, lensuffix) == 0) ? True : False;
+}
+
+Bool VG_(update_and_lookup_symbol)(const HChar* soname, const HChar* name, Addr* entry) {
+#if defined(VGP_arm_darwin)
+   Bool has_read = False;
+   Bool has_found = False;
+   Bool result;
+   DebugInfo* di;
+   DebugInfo* si;
+   dyld_image_desc imagedesc;
+   SymAVMAs avmas;
+   
+   for (si = debugInfo_list; si; si = si->next) {
+      if (ends_with(si->soname, soname)) {
+         has_found = True;
+         break;
+      }
+   }
+   
+   if (VG_(clo_verbosity) >= 2) {
+      if (has_found) {
+         VG_(message)(Vg_DebugMsg, "found debug info for so: %s\n", soname);
+      } else {
+         VG_(message)(Vg_DebugMsg, "did not found debug info for so: %s\n", soname);
+      }
+   }
+   
+   if (!has_found) {
+      // Try load it, maybe in dyld shared cache
+      imagedesc = ML_(get_dyld_image_desc_by_name)(&has_read, soname);
+      if (!imagedesc) {
+         return False;
+      }
+   
+      if (!has_read) {
+         di = find_or_create_DebugInfo_for(soname);
+         vg_assert(di);
+   
+         ML_(set_debug_info_mapping)(di, imagedesc);
+
+         ULong di_handle __attribute__((unused))
+            = di_notify_ACHIEVE_ACCEPT_STATE( di, imagedesc );
+      }
+   }
+   
+   result = VG_(lookup_symbol_SLOW)(soname, name, &avmas);
+   *entry = avmas.main;
+   return result;
+#else
+   return False;
 #endif
 }
 

@@ -267,6 +267,9 @@ VgSectKind VG_(DebugInfo_sect_kind)( /*OUT*/const HChar** name, Addr a);
                                      
 void VG_(update_DebugInfo_at_address)(Addr a);
 
+Bool VG_(update_and_lookup_symbol)(const HChar* soname, const HChar* name,
+                             Addr* entry);
+
 
 #endif   // __PUB_TOOL_DEBUGINFO_H
 

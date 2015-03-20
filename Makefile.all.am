@@ -223,7 +223,9 @@ AM_CCASFLAGS_AMD64_DARWIN  = -arch x86_64 -g
 AM_FLAG_M3264_ARM_DARWIN = -arch armv7
 AM_CFLAGS_ARM_DARWIN     = $(WERROR) -arch armv7 $(AM_CFLAGS_BASE) \
 			    -mno-thumb -ffixed-r9 -mios-version-min=7.0 -fno-stack-protector
-AM_CFLAGS_PSO_ARM_DARWIN = $(AM_CFLAGS_ARM_DARWIN) $(AM_CFLAGS_PSO_BASE)
+AM_CFLAGS_PSO_ARM_DARWIN = $(WERROR) -arch armv7 $(AM_CFLAGS_BASE) \
+			    -mios-version-min=7.0 -fno-stack-protector \
+			    $(AM_CFLAGS_PSO_BASE)
 AM_CCASFLAGS_ARM_DARWIN  = -arch armv7 -mno-thumb -g
 
 AM_FLAG_M3264_S390X_LINUX = @FLAG_M64@

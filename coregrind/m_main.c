@@ -3888,6 +3888,9 @@ __fixunsdfdi(double a)
 
 #if defined(VGA_arm)
 
+su_int 
+__udivsi3(su_int n, su_int d);
+
 su_int
 __udivsi3(su_int n, su_int d)
 {
@@ -3933,6 +3936,9 @@ __udivsi3(su_int n, su_int d)
 }
 
 si_int
+__divsi3(si_int a, si_int b);
+
+si_int
 __divsi3(si_int a, si_int b)
 {
     const int bits_in_word_m1 = (int)(sizeof(si_int) * CHAR_BIT) - 1;
@@ -3945,10 +3951,16 @@ __divsi3(si_int a, si_int b)
 }
 
 si_int
+__modsi3(si_int a, si_int b);
+
+si_int
 __modsi3(si_int a, si_int b)
 {
     return a - __divsi3(a, b) * b;
 }
+
+su_int
+__udivmodsi4(su_int a, su_int b, su_int* rem);
 
 su_int
 __udivmodsi4(su_int a, su_int b, su_int* rem)
@@ -3959,9 +3971,30 @@ __udivmodsi4(su_int a, su_int b, su_int* rem)
 }
 
 su_int
+__umodsi3(su_int a, su_int b);
+
+su_int
 __umodsi3(su_int a, su_int b)
 {
     return a - __udivsi3(a, b) * b;
+}
+
+double __floatundidf(du_int a);
+
+double __floatundidf(du_int a)
+{
+	static const double twop52 = 0x1.0p52;
+	static const double twop84 = 0x1.0p84;
+	static const double twop84_plus_twop52 = 0x1.00000001p84;
+	
+	union { uint64_t x; double d; } high = { .d = twop84 };
+	union { uint64_t x; double d; } low = { .d = twop52 };
+	
+	high.x |= a >> 32;
+	low.x |= a & UINT64_C(0x00000000ffffffff);
+	
+	const double result = (high.d - twop84_plus_twop52) + low.d;
+	return result;
 }
 
 #endif
