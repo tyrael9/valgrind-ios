@@ -8870,84 +8870,6 @@ PRE(sigreturn)
 
 
 /* ---------------------------------------------------------------------
-   machine-dependent traps
-   ------------------------------------------------------------------ */
-
-#if defined(VGA_x86)
-static VexGuestX86SegDescr* alloc_zeroed_x86_LDT ( void )
-{
-   Int nbytes = VEX_GUEST_X86_LDT_NENT * sizeof(VexGuestX86SegDescr);
-   return VG_(calloc)("syswrap-darwin.ldt", nbytes, 1);
-}
-#endif
-
-PRE(thread_fast_set_cthread_self)
-{
-   PRINT("thread_fast_set_cthread_self ( %#lx )", ARG1);
-   PRE_REG_READ1(void, "thread_fast_set_cthread_self", struct pthread_t *, self);
-
-#if defined(VGA_x86)
-   // Point the USER_CTHREAD ldt entry (slot 6, reg 0x37) at this pthread
-   {
-      VexGuestX86SegDescr *ldt;
-      ThreadState *tst = VG_(get_ThreadState)(tid);
-      ldt = (VexGuestX86SegDescr *)tst->arch.vex.guest_LDT;
-      if (!ldt) {
-         ldt = alloc_zeroed_x86_LDT();
-         tst->arch.vex.guest_LDT = (HWord)ldt;
-      }
-      VG_(memset)(&ldt[6], 0, sizeof(ldt[6]));
-      ldt[6].LdtEnt.Bits.LimitLow = 1;
-      ldt[6].LdtEnt.Bits.LimitHi = 0;
-      ldt[6].LdtEnt.Bits.BaseLow = ARG1 & 0xffff;
-      ldt[6].LdtEnt.Bits.BaseMid = (ARG1 >> 16) & 0xff;
-      ldt[6].LdtEnt.Bits.BaseHi = (ARG1 >> 24) & 0xff;
-      ldt[6].LdtEnt.Bits.Pres = 1; // ACC_P
-      ldt[6].LdtEnt.Bits.Dpl = 3; // ACC_PL_U
-      ldt[6].LdtEnt.Bits.Type = 0x12; // ACC_DATA_W
-      ldt[6].LdtEnt.Bits.Granularity = 1;  // SZ_G
-      ldt[6].LdtEnt.Bits.Default_Big = 1;  // SZ_32
-      
-      tst->os_state.pthread = ARG1;
-      tst->arch.vex.guest_GS = 0x37;
-
-      // What we would like to do is:
-      //   SET_STATUS_Success(0x37);
-      // but that doesn't work, because this is a MDEP-class syscall,
-      // and SET_STATUS_Success creates a UNIX-class syscall result.
-      // Hence we have to laboriously construct the full SysRes "by hand"
-      // and use that to set the syscall return status.
-      SET_STATUS_from_SysRes(
-         VG_(mk_SysRes_x86_darwin)(
-            VG_DARWIN_SYSNO_CLASS(__NR_thread_fast_set_cthread_self),
-            False, 0, 0x37
-         )
-      );
-   }
-
-#elif defined(VGA_amd64)
-   // GrP fixme bigger hack than x86
-   {
-      ThreadState *tst = VG_(get_ThreadState)(tid);
-      tst->os_state.pthread = ARG1;
-      tst->arch.vex.guest_GS_0x60 = ARG1;
-      // SET_STATUS_Success(0x60);
-      // see comments on x86 case just above
-      SET_STATUS_from_SysRes(
-         VG_(mk_SysRes_amd64_darwin)(
-            VG_DARWIN_SYSNO_CLASS(__NR_thread_fast_set_cthread_self),
-            False, 0, 0x60
-         )
-      );
-   }
-
-#else
-#error unknown architecture
-#endif
-}
-
-
-/* ---------------------------------------------------------------------
    Added for OSX 10.7 (Lion)
    ------------------------------------------------------------------ */
 
@@ -9531,14 +9453,14 @@ PRE(guarded_writev_np)
 #if defined(VGA_x86) || defined(VGA_amd64)
 
 /* ---------------------------------------------------------------------
-   machine-dependent traps: x86 and amd64
+   machine-dependent traps
    ------------------------------------------------------------------ */
 
 #if defined(VGA_x86)
 static VexGuestX86SegDescr* alloc_zeroed_x86_LDT ( void )
 {
    Int nbytes = VEX_GUEST_X86_LDT_NENT * sizeof(VexGuestX86SegDescr);
-   return VG_(arena_calloc)(VG_AR_CORE, "syswrap-darwin.ldt", nbytes, 1);
+   return VG_(calloc)("syswrap-darwin.ldt", nbytes, 1);
 }
 #endif
 

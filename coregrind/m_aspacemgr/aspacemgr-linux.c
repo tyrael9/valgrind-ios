@@ -1882,7 +1882,7 @@ Addr VG_(am_startup) ( Addr sp_at_startup )
    aspacem_maxAddr = (Addr) 0x3fffffff;
 
    aspacem_cStart = aspacem_minAddr;
-   aspacem_vStart = 0x18000000;  // 0x18000000..0x27d00000 available
+   aspacem_vStart = 0x18000000;  // 0x18000000..min(cstack, 0x27d00000) available
 # else
 # if VG_WORDSIZE == 4
    aspacem_maxAddr = (Addr) 0xffffffff;

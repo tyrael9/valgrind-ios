@@ -3403,7 +3403,7 @@ asm("\n"
     "\tb __start_in_C_darwin\n"
     "\t.word _vgPlain_interim_stack\n"
     "\t.word "VG_STRINGIFY(VG_STACK_GUARD_SZB)"\n"
-    "\t.word "VG_STRINGIFY(VG_STACK_ACTIVE_SZB)"\n"
+    "\t.word "VG_STRINGIFY(VG_DEFAULT_STACK_ACTIVE_SZB)"\n"
 );
 #else
 #error Unknown platform

@@ -473,6 +473,11 @@ void wqthread_hijack(Addr self, Addr kport, Addr stackaddr, Addr workitem,
       lock. */
    VG_(acquire_BigLock_LL)("wqthread_hijack");
 
+   if (0) VG_(printf)(
+             "wqthread_hijack: self %#lx, kport %#lx, "
+             "stackaddr %#lx, workitem %#lx, reuse/flags %x, sp %#lx\n",
+             self, kport, stackaddr, workitem, reuse, sp);
+
    /* Start the thread with all signals blocked.  VG_(scheduler) will
       set the mask correctly when we finally get there. */
    VG_(sigfillset)(&blockall);

@@ -44,6 +44,7 @@
 #include "pub_core_mallocfree.h"    // VG_(malloc), VG_(free)
 #include "pub_core_syscall.h"       // VG_(strerror)
 #include "pub_core_ume.h"           // self
+#include "pub_core_options.h"
 
 #include "priv_ume.h"
 
@@ -376,7 +377,33 @@ static vki_size_t default_stack_size(void)
    struct vki_rlimit lim;
    int err = VG_(getrlimit)(VKI_RLIMIT_STACK, &lim);
    if (err) return 8*1024*1024; // 8 MB
-   else return lim.rlim_cur;
+   
+#if defined(VGA_arm)
+   /* Similar to what is done for linux, take
+      notice of the --main-stacksize value.  This makes it possible
+      to run programs with very large (primary) stack requirements
+      simply by specifying --main-stacksize. */
+   /* Logic is as follows:
+      - by default, use the client's current stack rlimit
+      - if a larger --main-stacksize value is specified, use that instead
+      - if that exceeds 16M, clamp to 16M
+      - in all situations, the minimum allowed stack size is 1M, max is 16M
+   */
+   vki_size_t m1  = 1024 * 1024;
+   vki_size_t m16 = 16 * m1;
+   vki_size_t szB = lim.rlim_cur;
+   if (szB < m1) szB = m1;
+   if (VG_(clo_main_stacksize) > 0) szB = VG_(clo_main_stacksize);
+   if (szB > m16) szB = m16;
+   if (szB < m1) szB = m1;
+   szB = VG_PGROUNDUP(szB);
+   VG_(debugLog)(1, "initimg",
+                    "Setup client stack: size will be %ld\n", szB);
+                    
+   return szB; 
+#else
+   return lim.rlim_cur;
+#endif                
 }
 
 

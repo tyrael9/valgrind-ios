@@ -91,7 +91,7 @@ static Bool extend ( ThreadState *tst, Addr addr, SizeT size, Bool isAltStk )
 
    // Do not extend it if currently is using the altstack
    if (!isAltStk) {
-      if (VG_(extend_stack)(addr, tst->client_stack_szB)) {
+      if (VG_(extend_stack)(tid, addr)) {
          stackseg = VG_(am_find_nsegment)(addr);
       }
    }
