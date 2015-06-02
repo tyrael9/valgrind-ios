@@ -1454,6 +1454,7 @@ VG_(trampoline_stuff_end):
 #endif
 #endif
 #endif
+#endif
 
 #if defined(VGO_linux)
 /* Let the linker know we don't need an executable stack */

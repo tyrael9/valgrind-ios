@@ -459,7 +459,7 @@
 #define	__NR_sem_wait       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(271)
 #define	__NR_sem_trywait    VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(272)
 #define	__NR_sem_post       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(273)
-#define	__NR_sem_getvalue   VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(274)
+#define	__NR_sysctlbyname   VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(274)
 #define	__NR_sem_init       VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(275)
 #define	__NR_sem_destroy    VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(276)
 #define	__NR_open_extended  VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(277)

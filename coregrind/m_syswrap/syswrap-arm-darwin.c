@@ -961,7 +961,11 @@ const SyscallTableEntry ML_(syscall_table)[] = {
    GENXY(__NR_dup,         sys_dup), 
    MACXY(__NR_pipe,        pipe), 
    GENX_(__NR_getegid,     sys_getegid), 
-// _____(__NR_profil), 
+#if DARWIN_VERS >= DARWIN_10_7
+   _____(VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(44)),    // old profil
+#else
+// _____(__NR_profil),
+#endif
    _____(VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(45)),    // old ktrace
    MACXY(__NR_sigaction,   sigaction), 
    GENX_(__NR_getgid,      sys_getgid), 
@@ -1049,7 +1053,7 @@ const SyscallTableEntry ML_(syscall_table)[] = {
    _____(VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(129)),   // old truncate
    _____(VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(130)),   // old ftruncate
    GENX_(__NR_flock,       sys_flock), 
-// _____(__NR_mkfifo), 
+   MACXY(__NR_mkfifo,      mkfifo),
    MACX_(__NR_sendto,      sendto), 
    MACX_(__NR_shutdown,    shutdown), 
    MACXY(__NR_socketpair,  socketpair), 
@@ -1191,7 +1195,7 @@ const SyscallTableEntry ML_(syscall_table)[] = {
    MACX_(__NR_sem_wait,    sem_wait), 
    MACX_(__NR_sem_trywait, sem_trywait), 
    MACX_(__NR_sem_post,    sem_post), 
-// _____(__NR_sem_getvalue), 
+   MACXY(__NR_sysctlbyname,   sysctlbyname),     // 274
    MACXY(__NR_sem_init,    sem_init), 
    MACX_(__NR_sem_destroy, sem_destroy), 
    MACX_(__NR_open_extended,  open_extended),    // 277
@@ -1329,7 +1333,7 @@ const SyscallTableEntry ML_(syscall_table)[] = {
    GENX_(__NR_select_nocancel,   sys_select),
    GENX_(__NR_fsync_nocancel,    sys_fsync),
    MACX_(__NR_connect_nocancel,  connect),
-// _____(__NR_sigsuspend_nocancel),
+   MACX_(__NR_sigsuspend_nocancel, sigsuspend),
    GENXY(__NR_readv_nocancel,    sys_readv),
    GENX_(__NR_writev_nocancel,   sys_writev),
    MACX_(__NR_sendto_nocancel,   sendto),

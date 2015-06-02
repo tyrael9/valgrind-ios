@@ -8,12 +8,8 @@
    This file is part of Valgrind, a dynamic binary instrumentation
    framework.
 
-   Copyright (C) 2000-2013 Nicholas Nethercote
-      njn@valgrind.org
-   Copyright (C) 2004-2013 Paul Mackerras
-      paulus@samba.org
-   Copyright (C) 2008-2013 Evan Geller
-      gaze@bea.ms
+   Copyright (C) 2006-2013 OpenWorks Ltd
+      info@open-works.co.uk
    Copyright (C) 2014 Zhui Deng
       dengd03@gmail.com
 
@@ -40,7 +36,6 @@
 #include "pub_core_basics.h"
 #include "pub_core_vki.h"
 #include "pub_core_vkiscnums.h"
-#include "pub_core_libcsetjmp.h"    // to keep _threadstate.h happy
 #include "pub_core_threadstate.h"
 #include "pub_core_aspacemgr.h"
 #include "pub_core_libcbase.h"
@@ -48,113 +43,55 @@
 #include "pub_core_libcprint.h"
 #include "pub_core_machine.h"
 #include "pub_core_options.h"
-#include "pub_core_sigframe.h"
 #include "pub_core_signals.h"
 #include "pub_core_tooliface.h"
 #include "pub_core_trampoline.h"
-#include "pub_core_transtab.h"      // VG_(discard_translations)
+#include "pub_core_sigframe.h"      /* self */
+#include "priv_sigframe.h"
 
 
-/* This uses the hack of dumping the vex guest state along with both
-   shadows in the frame, and restoring it afterwards from there,
-   rather than pulling it out of the ucontext.  That means that signal
-   handlers which modify the ucontext and then return, expecting their
-   modifications to take effect, will have those modifications
-   ignored.  This could be fixed properly with an hour or so more
-   effort. */
+/* Originally copied from ppc32-aix5 code.
+   Produce a frame with layout entirely of our own choosing.
 
+   This module creates and removes signal frames for signal deliveries
+   on arm-darwin.  The machine state is saved in a ucontext and retrieved
+   from it later, so the handler can modify it and return.
 
-struct vg_sig_private {
-   UInt magicPI;
-   UInt sigNo_private;
-   //VexGuestARMState vex;
+   Frame should have a 16-aligned size, just in case that turns out to
+   be important for Darwin.  (be conservative)
+*/
+struct hacky_sigframe {
+   UChar            lower_guardzone[512];  // put nothing here
+   VexGuestARMState vex;
    VexGuestARMState vex_shadow1;
    VexGuestARMState vex_shadow2;
+   vki_siginfo_t    fake_siginfo;
+   struct vki_ucontext fake_ucontext;
+   UInt             magicPI;
+   UInt             sigNo_private;
+   vki_sigset_t     mask; // saved sigmask; restore when hdlr returns
+   UInt             __pad[3];
+   UChar            upper_guardzone[512]; // put nothing here
+   // and don't zero it, since that might overwrite the client's
+   // stack redzone, at least on archs which have one
 };
 
-struct sigframe {
-   vki_siginfo_t info;
-   struct vki_ucontext uc;
-   struct __darwin_mcontext32 mctxt;
-   struct vg_sig_private vp;
-};
 
-static Bool __on_sig_stack ( ThreadState *tst, Addr sp )
+/* Create a plausible-looking sigcontext from the thread's
+   Vex guest state.
+ */
+static void synthesize_ucontext(ThreadState *tst,
+				struct vki_ucontext *uc,
+				const struct vki_ucontext *siguc)
 {
-   return (tst->altstack.ss_size == 0 ? False : (sp - (Addr)tst->altstack.ss_sp < (Addr)tst->altstack.ss_size));
-}
-
-static Bool extend ( ThreadState *tst, Addr addr, SizeT size, Bool isAltStk )
-{
-   ThreadId        tid = tst->tid;
-   NSegment const* stackseg = NULL;
-
-   // Do not extend it if currently is using the altstack
-   if (!isAltStk) {
-      if (VG_(extend_stack)(tid, addr)) {
-         stackseg = VG_(am_find_nsegment)(addr);
-      }
-   }
-   else {
-      stackseg = VG_(am_find_nsegment)(addr);
-   }
-         
-   if (0 && stackseg) {
-       VG_(printf)("frame=%#lx seg=%#lx-%#lx\n",
-              addr, stackseg->start, stackseg->end);}
-
-   if (stackseg == NULL || !stackseg->hasR || !stackseg->hasW) {
-      VG_(message)(
-         Vg_UserMsg,
-         "Can't extend stack to %#lx during signal delivery for thread %d:",
-         addr, tid);
-      if (stackseg == NULL)
-         VG_(message)(Vg_UserMsg, "  no stack segment");
-      else
-         VG_(message)(Vg_UserMsg, "  too small or bad protection modes");
-
-      /* set SIGSEGV to default handler */
-      VG_(set_default_handler)(VKI_SIGSEGV);
-      VG_(synth_fault_mapping)(tid, addr);
-
-      /* The whole process should be about to die, since the default
-    action of SIGSEGV to kill the whole process. */
-      return False;
-   }
-
-   /* For tracking memory events, indicate the entire frame has been
-      allocated. */
-   VG_TRACK( new_mem_stack_signal, addr - VG_STACK_REDZONE_SZB,
-             size + VG_STACK_REDZONE_SZB, tid );
-
-   return True;
-}
-
-static void synth_ucontext( ThreadId tid, struct sigframe *frame, 
-               const vki_siginfo_t *si, const struct vki_ucontext *siguc, 
-               UInt flags, const vki_sigset_t *set, Addr sp){
-
-   struct vki_ucontext *uc = &frame->uc;
-   ThreadState *tst = VG_(get_ThreadState)(tid);
-
    VG_(memset)(uc, 0, sizeof(*uc));
-   VG_(memset)(&frame->mctxt, 0, sizeof(struct __darwin_mcontext32));
 
-   uc->uc_onstack = flags & VKI_SA_ONSTACK;
-   uc->uc_link = 0;
-   uc->uc_sigmask = *((sigset_t *)set);
-   if ((flags & VKI_SA_ONSTACK) && (__on_sig_stack(tst, sp))) {
-      uc->uc_stack = tst->altstack;
-   }
-   else {
-      uc->uc_stack.ss_sp = (void *)sp;
-      uc->uc_stack.ss_size = 0;
-   }
-   uc->uc_mcsize = sizeof(struct __darwin_mcontext32);
-   struct __darwin_mcontext32 *sc = uc->uc_mcontext = &frame->mctxt;
-
+   if (siguc) uc->uc_sigmask = siguc->uc_sigmask;
+   uc->uc_stack = tst->altstack;
+   uc->uc_mcontext = &uc->__mcontext_data;
+   
    // General Registers (i.e. ss)
-#  define SCSS2(reg,REG)  sc->__ss.reg = tst->arch.vex.guest_##REG
+#  define SCSS2(reg,REG)  uc->__mcontext_data.__ss.reg = tst->arch.vex.guest_##REG
    SCSS2(__r[0],R0);
    SCSS2(__r[1],R1);
    SCSS2(__r[2],R2);
@@ -171,11 +108,11 @@ static void synth_ucontext( ThreadId tid, struct sigframe *frame,
    SCSS2(__sp,R13);
    SCSS2(__lr,R14);
    SCSS2(__pc,R15T);
-   sc->__ss.__cpsr = LibVEX_GuestARM_get_cpsr(&(tst->arch.vex));
+   uc->__mcontext_data.__ss.__cpsr = LibVEX_GuestARM_get_cpsr(&(tst->arch.vex));
 #  undef SCSS2
    
    // FP Regsiters (i.e. fs)
-#  define SCFS2(reg,REG)  *(ULong *)(&sc->__fs.reg) = tst->arch.vex.guest_##REG
+#  define SCFS2(reg,REG)  *(ULong *)(&(uc->__mcontext_data.__fs.reg)) = tst->arch.vex.guest_##REG
    SCFS2(__r[0],D0);
    SCFS2(__r[2],D1);
    SCFS2(__r[4],D2);
@@ -208,202 +145,192 @@ static void synth_ucontext( ThreadId tid, struct sigframe *frame,
    SCFS2(__r[58],D29);
    SCFS2(__r[60],D30);
    SCFS2(__r[62],D31);
-   sc->__fs.__fpscr = tst->arch.vex.guest_FPSCR;
+   uc->__mcontext_data.__fs.__fpscr = tst->arch.vex.guest_FPSCR;
 #  undef SCFS2
 
-   // Exception state (i.e. es)
-   if (siguc) {
-      sc->__es.__exception = siguc->uc_mcontext->__es.__exception;
-      sc->__es.__fsr = siguc->uc_mcontext->__es.__exception;
-   }
-   else {
-      sc->__es.__exception = 0;
-      sc->__es.__fsr = 0;
-   }
-   sc->__es.__far = (UInt)si->si_addr;
+   if (siguc)
+      uc->__mcontext_data.__es = siguc->__mcontext_data.__es;
 }
 
-
-static void build_sigframe(ThreadState *tst,
-            struct sigframe *frame,
-            const vki_siginfo_t *siginfo,
-            const struct vki_ucontext *siguc,
-            UInt flags, const vki_sigset_t *mask,
-            Addr sp){
-
-   Int  sigNo = siginfo->si_signo;
-   struct vg_sig_private *priv = &frame->vp;
-
-   VG_TRACK( pre_mem_write, Vg_CoreSignal, tst->tid, "signal handler ucontext",
-         (Addr)(&frame->uc), offsetof(struct sigframe, vp) - offsetof(struct sigframe, uc));
-
-   synth_ucontext(tst->tid, frame, siginfo, siguc, flags, mask, sp);
-
-   VG_TRACK( post_mem_write, Vg_CoreSignal, tst->tid,
-         (Addr)(&frame->uc), offsetof(struct sigframe, vp) - offsetof(struct sigframe, uc));
-
-   priv->magicPI = 0x31415927;
-   priv->sigNo_private = sigNo;
-   //priv->vex         = tst->arch.vex;
-   priv->vex_shadow1 = tst->arch.vex_shadow1;
-   priv->vex_shadow2 = tst->arch.vex_shadow2;
-
-}
-
-
-
-/* EXPORTED */
-void VG_(sigframe_create)( ThreadId tid, 
-                           Addr sp_top_of_frame,
-                           const vki_siginfo_t *siginfo,
-                           const struct vki_ucontext *siguc,
-                           void *handler, 
-                           UInt flags,
-                           const vki_sigset_t *mask,
-                           void *restorer )
+static void restore_from_ucontext(ThreadState *tst,
+				  const struct vki_ucontext *uc)
 {
-   Addr sp = sp_top_of_frame;
-   ThreadState *tst;
+   // General Registers (i.e. ss)
+#  define SCSS2(reg,REG)  tst->arch.vex.guest_##REG = uc->__mcontext_data.__ss.reg
+   SCSS2(__r[0],R0);
+   SCSS2(__r[1],R1);
+   SCSS2(__r[2],R2);
+   SCSS2(__r[3],R3);
+   SCSS2(__r[4],R4);
+   SCSS2(__r[5],R5);
+   SCSS2(__r[6],R6);
+   SCSS2(__r[7],R7);
+   SCSS2(__r[8],R8);
+   SCSS2(__r[9],R9);
+   SCSS2(__r[10],R10);
+   SCSS2(__r[11],R11);
+   SCSS2(__r[12],R12);
+   SCSS2(__sp,R13);
+   SCSS2(__lr,R14);
+   SCSS2(__pc,R15T);
+   LibVEX_GuestARM_set_cpsr(uc->__mcontext_data.__ss.__cpsr, &(tst->arch.vex));
+#  undef SCSS2
+   
+   // FP Regsiters (i.e. fs)
+#  define SCFS2(reg,REG)  tst->arch.vex.guest_##REG = *(ULong *)(&(uc->__mcontext_data.__fs.reg))
+   SCFS2(__r[0],D0);
+   SCFS2(__r[2],D1);
+   SCFS2(__r[4],D2);
+   SCFS2(__r[6],D3);
+   SCFS2(__r[8],D4);
+   SCFS2(__r[10],D5);
+   SCFS2(__r[12],D6);
+   SCFS2(__r[14],D7);
+   SCFS2(__r[16],D8);
+   SCFS2(__r[18],D9);
+   SCFS2(__r[20],D10);
+   SCFS2(__r[22],D11);
+   SCFS2(__r[24],D12);
+   SCFS2(__r[26],D13);
+   SCFS2(__r[28],D14);
+   SCFS2(__r[30],D15);
+   SCFS2(__r[32],D16);
+   SCFS2(__r[34],D17);
+   SCFS2(__r[36],D18);
+   SCFS2(__r[38],D19);
+   SCFS2(__r[40],D20);
+   SCFS2(__r[42],D21);
+   SCFS2(__r[44],D22);
+   SCFS2(__r[46],D23);
+   SCFS2(__r[48],D24);
+   SCFS2(__r[50],D25);
+   SCFS2(__r[52],D26);
+   SCFS2(__r[54],D27);
+   SCFS2(__r[56],D28);
+   SCFS2(__r[58],D29);
+   SCFS2(__r[60],D30);
+   SCFS2(__r[62],D31);
+   tst->arch.vex.guest_FPSCR = uc->__mcontext_data.__fs.__fpscr;
+#  undef SCFS2
+}
+
+/* Create a signal frame for thread 'tid'.  Make a 3-arg frame
+   regardless of whether the client originally requested a 1-arg
+   version (no SA_SIGINFO) or a 3-arg one (SA_SIGINFO) since in the
+   former case, the x86 calling conventions will simply cause the
+   extra 2 args to be ignored (inside the handler). */
+void VG_(sigframe_create) ( ThreadId tid,
+                            Addr sp_top_of_frame,
+                            const vki_siginfo_t *siginfo,
+                            const struct vki_ucontext *siguc,
+                            void *handler,
+                            UInt flags,
+                            const vki_sigset_t *mask,
+                            void *restorer )
+{
+   ThreadState* tst;
+   Addr esp;
+   struct hacky_sigframe* frame;
    Int sigNo = siginfo->si_signo;
-   Bool isAltStk = False;
+
+   vg_assert(VG_IS_16_ALIGNED(sizeof(struct hacky_sigframe)));
+
+   sp_top_of_frame &= ~0xf;
+   esp = sp_top_of_frame - sizeof(struct hacky_sigframe);
 
    tst = VG_(get_ThreadState)(tid);
-
-   sp -= sizeof(struct sigframe);
-   sp = VG_ROUNDDN(sp, 16);
-   
-   isAltStk = ((flags & VKI_SA_ONSTACK) && (__on_sig_stack(tst, sp)));
-
-   if(!extend(tst, sp, sizeof(struct sigframe), isAltStk))
+   if (! ML_(sf_maybe_extend_stack)(tst, esp, sp_top_of_frame - esp, flags))
       return;
 
-   struct sigframe *sf = (struct sigframe *)sp;
-   
-   /* Track our writes to siginfo */
-   VG_TRACK( pre_mem_write, Vg_CoreSignal, tst->tid,  /* VVVVV */
-         "signal handler siginfo", (Addr)sf, 
-         sizeof(vki_siginfo_t));
+   vg_assert(VG_IS_4_ALIGNED(esp));
 
-   VG_(memcpy)(&sf->info, siginfo, sizeof(vki_siginfo_t));
+   frame = (struct hacky_sigframe *) esp;
 
-   if(sigNo == VKI_SIGILL && siginfo->si_code > 0) {
-      sf->info.si_addr = (Addr *) (tst)->arch.vex.guest_R12; /* IP */
-   }
-   VG_TRACK( post_mem_write, Vg_CoreSignal, tst->tid, /* ^^^^^ */
-         (Addr)sf, sizeof(vki_siginfo_t));
+   /* clear it (very conservatively) */
+   VG_(memset)(&frame->lower_guardzone, 0, sizeof frame->lower_guardzone);
+   VG_(memset)(&frame->vex,      0, sizeof(VexGuestARMState));
+   VG_(memset)(&frame->vex_shadow1, 0, sizeof(VexGuestARMState));
+   VG_(memset)(&frame->vex_shadow2, 0, sizeof(VexGuestARMState));
+   VG_(memset)(&frame->fake_siginfo,  0, sizeof(frame->fake_siginfo));
+   VG_(memset)(&frame->fake_ucontext, 0, sizeof(frame->fake_ucontext));
 
-   build_sigframe(tst, sf, siginfo, siguc, flags, mask, sp);
-   tst->arch.vex.guest_R1 = (Addr)&sf->info;
-   tst->arch.vex.guest_R2 = (Addr)&sf->uc;
+   /* save stuff in frame */
+   frame->vex           = tst->arch.vex;
+   frame->vex_shadow1   = tst->arch.vex_shadow1;
+   frame->vex_shadow2   = tst->arch.vex_shadow2;
+   frame->sigNo_private = sigNo;
+   frame->mask          = tst->sig_mask;
+   frame->magicPI       = 0x31415927;
 
-   VG_(set_SP)(tid, sp);
-   VG_TRACK( post_reg_write, Vg_CoreSignal, tid, VG_O_STACK_PTR,
-         sizeof(Addr));
-   tst->arch.vex.guest_R0  = sigNo; 
+   /* Fill in the siginfo and ucontext.  */
+   synthesize_ucontext(tst, &frame->fake_ucontext, siguc);
+   frame->fake_siginfo = *siginfo;
 
-   tst->arch.vex.guest_R14 = (Addr)&VG_(arm_darwin_SUBST_FOR_sigreturn);
+   /* Set up stack pointer */
+   VG_(set_SP)(tid, esp);
+   VG_TRACK( post_reg_write, Vg_CoreSignal, tid, VG_O_STACK_PTR, sizeof(UInt));
 
-   tst->arch.vex.guest_R15T = (Addr) handler; /* R15 == PC */
+   /* Set up program counter */
+   VG_(set_IP)(tid, (UInt)handler);
+   VG_TRACK( post_reg_write, Vg_CoreSignal, tid, VG_O_INSTR_PTR, sizeof(UInt));
+
+   /* Set up RA and args for the frame */
+   tst->arch.vex.guest_R14 = (UInt)&VG_(arm_darwin_SUBST_FOR_sigreturn);
+   tst->arch.vex.guest_R0 = sigNo; 
+   tst->arch.vex.guest_R1 = (UInt)&frame->fake_siginfo;
+   tst->arch.vex.guest_R2 = (UInt)&frame->fake_ucontext;
+   VG_TRACK( post_mem_write, Vg_CoreSignal, tid,
+             (Addr)&frame->fake_siginfo, sizeof(frame->fake_siginfo));
+   VG_TRACK( post_mem_write, Vg_CoreSignal, tid,
+             (Addr)&frame->fake_ucontext, sizeof(frame->fake_ucontext));
+
+   if (VG_(clo_trace_signals))
+      VG_(message)(Vg_DebugMsg,
+                   "sigframe_create (thread %d): "
+                   "next EIP=%#lx, next ESP=%#lx\n",
+                   tid, (Addr)handler, (Addr)frame );
 }
 
-
-/*------------------------------------------------------------*/
-/*--- Destroying signal frames                             ---*/
-/*------------------------------------------------------------*/
-
-/* EXPORTED */
+/* Remove a signal frame from thread 'tid's stack, and restore the CPU
+   state from it.  Note, isRT is irrelevant here. */
 void VG_(sigframe_destroy)( ThreadId tid, Bool isRT )
 {
    ThreadState *tst;
-   struct vg_sig_private *priv;
    Addr sp;
-   struct __darwin_mcontext32 *sc;
    Int sigNo;
-
+   struct hacky_sigframe* frame;
+ 
    vg_assert(VG_(is_valid_tid)(tid));
    tst = VG_(get_ThreadState)(tid);
-   sp = tst->arch.vex.guest_R13;
 
-   struct sigframe *frame = (struct sigframe *)sp;
-   sc = frame->uc.uc_mcontext;
-   priv = &frame->vp;
-   vg_assert(priv->magicPI == 0x31415927);
-   tst->sig_mask = *(vki_sigset_t *)(&(frame->uc.uc_sigmask));
-   tst->tmp_sig_mask = tst->sig_mask;
-   sigNo = priv->sigNo_private;
+   /* Check that the stack frame looks valid */
+   sp = VG_(get_SP)(tid);
 
-   // General Registers (i.e. ss)
-#  define SCSS2(reg,REG)  tst->arch.vex.guest_##REG = sc->__ss.reg
-   SCSS2(__r[0],R0);
-   SCSS2(__r[1],R1);
-   SCSS2(__r[2],R2);
-   SCSS2(__r[3],R3);
-   SCSS2(__r[4],R4);
-   SCSS2(__r[5],R5);
-   SCSS2(__r[6],R6);
-   SCSS2(__r[7],R7);
-   SCSS2(__r[8],R8);
-   SCSS2(__r[9],R9);
-   SCSS2(__r[10],R10);
-   SCSS2(__r[11],R11);
-   SCSS2(__r[12],R12);
-   SCSS2(__sp,R13);
-   SCSS2(__lr,R14);
-   SCSS2(__pc,R15T);
-   LibVEX_GuestARM_set_cpsr(sc->__ss.__cpsr, &(tst->arch.vex));
-#  undef SCSS2
-   
-   // FP Regsiters (i.e. fs)
-#  define SCFS2(reg,REG)  tst->arch.vex.guest_##REG = *(ULong *)(&sc->__fs.reg)
-   SCFS2(__r[0],D0);
-   SCFS2(__r[2],D1);
-   SCFS2(__r[4],D2);
-   SCFS2(__r[6],D3);
-   SCFS2(__r[8],D4);
-   SCFS2(__r[10],D5);
-   SCFS2(__r[12],D6);
-   SCFS2(__r[14],D7);
-   SCFS2(__r[16],D8);
-   SCFS2(__r[18],D9);
-   SCFS2(__r[20],D10);
-   SCFS2(__r[22],D11);
-   SCFS2(__r[24],D12);
-   SCFS2(__r[26],D13);
-   SCFS2(__r[28],D14);
-   SCFS2(__r[30],D15);
-   SCFS2(__r[32],D16);
-   SCFS2(__r[34],D17);
-   SCFS2(__r[36],D18);
-   SCFS2(__r[38],D19);
-   SCFS2(__r[40],D20);
-   SCFS2(__r[42],D21);
-   SCFS2(__r[44],D22);
-   SCFS2(__r[46],D23);
-   SCFS2(__r[48],D24);
-   SCFS2(__r[50],D25);
-   SCFS2(__r[52],D26);
-   SCFS2(__r[54],D27);
-   SCFS2(__r[56],D28);
-   SCFS2(__r[58],D29);
-   SCFS2(__r[60],D30);
-   SCFS2(__r[62],D31);
-   tst->arch.vex.guest_FPSCR = sc->__fs.__fpscr;
-#  undef SCFS2
+   frame = (struct hacky_sigframe*)(sp);
+   vg_assert(frame->magicPI == 0x31415927);
+   vg_assert(VG_IS_16_ALIGNED((Addr)frame));
 
-   /* Uh, the next line makes all the REST() above pointless. */
-   //tst->arch.vex         = priv->vex;
+   /* restore the entire guest state, and shadows, from the
+      frame.  Note, as per comments above, this is a kludge - should
+      restore it from saved ucontext.  Oh well. */
+   tst->arch.vex = frame->vex;
+   tst->arch.vex_shadow1 = frame->vex_shadow1;
+   tst->arch.vex_shadow2 = frame->vex_shadow2;
+   restore_from_ucontext(tst, &frame->fake_ucontext);
 
-   tst->arch.vex_shadow1 = priv->vex_shadow1;
-   tst->arch.vex_shadow2 = priv->vex_shadow2;
+   tst->sig_mask = frame->mask;
+   tst->tmp_sig_mask = frame->mask;
+   sigNo = frame->sigNo_private;
 
-   VG_TRACK( die_mem_stack_signal, sp - VG_STACK_REDZONE_SZB,
-             sizeof(struct sigframe) + VG_STACK_REDZONE_SZB );
-             
    if (VG_(clo_trace_signals))
       VG_(message)(Vg_DebugMsg,
                    "sigframe_destroy (thread %d): "
-                   "valid magic; PC=%#x\n",
+                   "valid magic; next IP=%#x\n",
                    tid, tst->arch.vex.guest_R15T);
+
+   VG_TRACK( die_mem_stack_signal, 
+             (Addr)frame - VG_STACK_REDZONE_SZB, 
+             sizeof(struct hacky_sigframe) );
 
    /* tell the tools */
    VG_TRACK( post_deliver_signal, tid, sigNo );

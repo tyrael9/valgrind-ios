@@ -352,9 +352,15 @@ typedef uint32_t vki_u32;
 
 #include <mach/vm_param.h>
 
-#define VKI_PAGE_SHIFT PAGE_SHIFT
-#define VKI_PAGE_SIZE PAGE_SIZE
-#define VKI_PAGE_MASK PAGE_MASK
+#if defined(VGA_arm)
+#  define VKI_PAGE_SHIFT 12
+#  define VKI_PAGE_SIZE 4096
+#  define VKI_PAGE_MASK (VKI_PAGE_SIZE-1)
+#else
+#  define VKI_PAGE_SHIFT PAGE_SHIFT
+#  define VKI_PAGE_SIZE PAGE_SIZE
+#  define VKI_PAGE_MASK PAGE_MASK
+#endif
 
 #if defined(VGA_x86) || defined(VGA_amd64)
 #  include <sys/vmparam.h>

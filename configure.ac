@@ -3043,6 +3043,7 @@ AC_CONFIG_FILES([
    coregrind/Makefile 
    none/Makefile
    none/tests/Makefile
+   none/tests/scripts/Makefile
    none/tests/amd64/Makefile
    none/tests/ppc32/Makefile
    none/tests/ppc64/Makefile
@@ -3052,9 +3053,13 @@ AC_CONFIG_FILES([
    none/tests/s390x/Makefile
    none/tests/mips32/Makefile
    none/tests/mips64/Makefile
+   none/tests/tilegx/Makefile
    none/tests/linux/Makefile
    none/tests/darwin/Makefile
+   none/tests/amd64-linux/Makefile
    none/tests/x86-linux/Makefile
+   none/tests/amd64-darwin/Makefile
+   none/tests/x86-darwin/Makefile
    iris/Makefile
    iris/tests/Makefile
 ])
