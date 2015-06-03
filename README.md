@@ -7,9 +7,15 @@ This port of Valgrind runs on jail-broken iOS devices.
 * Initialize the VEX submodule: `git submodule update --init --recursive`
 
 ## Build
-Make sure you are in the root directory of the source repository. You must
-have the standard `autoconf` tools installed to build Valgrind. 
+The following build environment is required:
+* Mac OS X >= 10.9
+* Xcode >= 5.0 
+* iOS SDK >= 7.0
 
+You also need the standard `autoconf` tools to build Valgrind, which
+you can install with homebrew on OS X.
+
+Make sure you are in the root directory of the source repository. 
 Use the following commands to build:
 ```
 ./autogen.sh
