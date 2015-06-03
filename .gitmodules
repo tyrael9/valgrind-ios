@@ -1,5 +1,5 @@
 [submodule "VEX"]
 	path = VEX
 	url = https://github.com/tyrael9/VEX.git
-	branch = ios
+	branch = master
 	ignore = dirty
