@@ -38,7 +38,7 @@ lib/valgrind/vgpreload_core-arm-darwin.so
 ```
 
 Suppose the directory is copied to `/var/root/valgrind-ios`, you could use the following command
-to run Valgrind on ls:
+to run Valgrind on ls. Note that you must be root in order to run Valgrind.
 ```
 VALGRIND_LIB=/var/root/valgrind-ios/lib/valgrind /var/root/valgrind-ios/bin/valgrind ls -l
 ```
