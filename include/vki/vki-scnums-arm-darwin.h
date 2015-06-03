@@ -652,10 +652,16 @@
 #define __NR_system_override        VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(454)
 #define __NR_vfs_purge              VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(455)
 
-#if DARWIN_VERS == DARWIN_IOS_7
+#if IOS_VERS >= IOS_8
+#define __NR_bsdthread_ctl          VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(478)
+#endif
+
+#if IOS_VERS == IOS_7
 #define	__NR_MAXSYSCALL             VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(456)
+#elif IOS_VERS == IOS_8
+#define	__NR_MAXSYSCALL             VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(490)
 #else
-#error unknown darwin version
+#error unknown iOS version
 #endif
 
 #define __NR_DARWIN_FAKE_SIGRETURN (1 + __NR_MAXSYSCALL)

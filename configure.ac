@@ -320,10 +320,10 @@ AC_SUBST(VGCONF_OS)
 
 DEFAULT_SUPP=""
 
-AC_ARG_WITH(darwinver,
-   [  --with-darwinver=VER      Specify Darwin version for cross-compile],
-   darwinver="$withval",
-   darwinver="no")
+AC_ARG_WITH(iosver,
+   [  --with-iosver=VER      Specify iOS version for cross-compile],
+   iosver="$withval",
+   iosver="no")
 
 case "${host_os}" in
      *linux*)
@@ -351,13 +351,17 @@ case "${host_os}" in
      *darwin*)
         AC_MSG_RESULT([ok (${host_os})])
         VGCONF_OS="darwin"
-        AC_DEFINE([DARWIN_10_5], 9, [DARWIN_VERS value for Mac OS X 10.5])
-        AC_DEFINE([DARWIN_10_6], 10, [DARWIN_VERS value for Mac OS X 10.6])
-        AC_DEFINE([DARWIN_10_7], 11, [DARWIN_VERS value for Mac OS X 10.7])
-        AC_DEFINE([DARWIN_10_8], 12, [DARWIN_VERS value for Mac OS X 10.8])
-        AC_DEFINE([DARWIN_10_9], 13, [DARWIN_VERS value for Mac OS X 10.9])
-        AC_DEFINE([DARWIN_10_10], 14, [DARWIN_VERS value for Mac OS X 10.10])
-		AC_DEFINE([DARWIN_IOS_7], 14, [DARWIN_VERS value for iOS 7])
+        AC_DEFINE([DARWIN_10_5], 90000, [DARWIN_VERS value for Mac OS X 10.5])
+        AC_DEFINE([DARWIN_10_6], 100000, [DARWIN_VERS value for Mac OS X 10.6])
+        AC_DEFINE([DARWIN_10_7], 110000, [DARWIN_VERS value for Mac OS X 10.7])
+        AC_DEFINE([DARWIN_10_8], 120000, [DARWIN_VERS value for Mac OS X 10.8])
+        AC_DEFINE([DARWIN_10_9], 130000, [DARWIN_VERS value for Mac OS X 10.9])
+        AC_DEFINE([DARWIN_10_10], 140000, [DARWIN_VERS value for Mac OS X 10.10])
+		  AC_DEFINE([DARWIN_IOS_7], 140000, [DARWIN_VERS value for iOS 7])
+        AC_DEFINE([DARWIN_IOS_8], 140000, [DARWIN_VERS value for iOS 8])
+        
+		  AC_DEFINE([IOS_7], 70000, [IOS_VERS value for iOS 7])
+		  AC_DEFINE([IOS_8], 80000, [IOS_VERS value for iOS 8])
 
 		# Check for cross-compile
 		# If it's not cross-compiling, use "uname -r" to detect kernel version
@@ -367,12 +371,10 @@ case "${host_os}" in
 			AC_MSG_CHECKING([for the kernel version])
 			kernel=`uname -r`
 		else
-			if [[ "${darwinver}" == no ]]
+			if [[ "${iosver}" == no ]]
 			then
-				AC_MSG_RESULT([unrecognized darwin version (${darwinver})])
-				AC_MSG_ERROR([Please specify a valid darwin version using --with-darwinver option for cross compile])
-			else
-				kernel=$darwinver
+				AC_MSG_RESULT([unrecognized iOS version (${iosver})])
+				AC_MSG_ERROR([Please specify a valid iOS version using --with-iosver option for cross compile])
 			fi
 		fi
         
@@ -438,14 +440,22 @@ case "${host_os}" in
 			esac
 		elif [[[ "${host_cpu}" == armv7* ]]]
 		then
-			case "${kernel}" in
-				14.*)
+			case "${iosver}" in
+				7.*)
+      		  kernel=14.0.0
 				  AC_MSG_RESULT([Darwin 14.x (${kernel}) / iOS 7])
 				  AC_DEFINE([DARWIN_VERS], DARWIN_IOS_7, [Darwin / iOS version])
+				  AC_DEFINE([IOS_VERS], IOS_7, [iOS version])
+				  ;;
+				8.*)
+      		  kernel=14.0.0
+				  AC_MSG_RESULT([Darwin 14.x (${kernel}) / iOS 8])
+				  AC_DEFINE([DARWIN_VERS], DARWIN_IOS_8, [Darwin / iOS version])
+				  AC_DEFINE([IOS_VERS], IOS_8, [iOS version])
 				  ;;
 				*)
-				  AC_MSG_RESULT([unsupported (${kernel})])
-				  AC_MSG_ERROR([Valgrind works on Darwin 14.x (iOS 7) on ARM])
+				  AC_MSG_RESULT([unsupported iOS version (${iosver})])
+				  AC_MSG_ERROR([Valgrind works on Darwin 14.x (iOS 7/8) on ARM])
 				  ;;
 			esac
 		else
@@ -3060,8 +3070,6 @@ AC_CONFIG_FILES([
    none/tests/x86-linux/Makefile
    none/tests/amd64-darwin/Makefile
    none/tests/x86-darwin/Makefile
-   iris/Makefile
-   iris/tests/Makefile
 ])
 AC_CONFIG_FILES([coregrind/link_tool_exe_linux],
                 [chmod +x coregrind/link_tool_exe_linux])

@@ -5,8 +5,6 @@ include $(top_srcdir)/Makefile.all.am
 
 NULONLY = none
 
-IRIS = iris
-
 TOOLS =		memcheck \
 		cachegrind \
 		callgrind \
@@ -27,8 +25,7 @@ SUBDIRS = \
 	VEX \
 	coregrind \
 	. \
-	$(NULONLY) \
-   	$(IRIS)
+	$(NULONLY)
 #	$(TOOLS) \
 #	$(EXP_TOOLS) \
 #	shared \

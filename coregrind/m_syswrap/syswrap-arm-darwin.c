@@ -961,11 +961,7 @@ const SyscallTableEntry ML_(syscall_table)[] = {
    GENXY(__NR_dup,         sys_dup), 
    MACXY(__NR_pipe,        pipe), 
    GENX_(__NR_getegid,     sys_getegid), 
-#if DARWIN_VERS >= DARWIN_10_7
    _____(VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(44)),    // old profil
-#else
-// _____(__NR_profil),
-#endif
    _____(VG_DARWIN_SYSCALL_CONSTRUCT_UNIX(45)),    // old ktrace
    MACXY(__NR_sigaction,   sigaction), 
    GENX_(__NR_getgid,      sys_getgid), 
@@ -1380,7 +1376,9 @@ const SyscallTableEntry ML_(syscall_table)[] = {
 // _____(__NR_memorystatus_get_level), 
 // _____(__NR_system_override), 
 // _____(__NR_vfs_purge), 
-
+#if IOS_VERS >= IOS_8
+    MACX_(__NR_bsdthread_ctl,       bsdthread_ctl),      // 478
+#endif
 // _____(__NR_MAXSYSCALL)
    MACX_(__NR_DARWIN_FAKE_SIGRETURN, FAKE_SIGRETURN)
 };

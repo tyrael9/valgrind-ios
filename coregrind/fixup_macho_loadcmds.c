@@ -121,7 +121,8 @@
 #include "config.h"
 #if DARWIN_VERS != DARWIN_10_5 && DARWIN_VERS != DARWIN_10_6 \
     && DARWIN_VERS != DARWIN_10_7 && DARWIN_VERS != DARWIN_10_8 \
-    && DARWIN_VERS != DARWIN_10_9 && DARWIN_VERS != DARWIN_10_10
+    && DARWIN_VERS != DARWIN_10_9 && DARWIN_VERS != DARWIN_10_10 \
+    && DARWIN_VERS != DARWIN_IOS_7 && DARWIN_VERS != DARWIN_IOS_8
 #  error "Unknown DARWIN_VERS value.  This file only compiles on Darwin."
 #endif
 
